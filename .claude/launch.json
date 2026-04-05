@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "estimafacil-web",
+      "runtimeExecutable": "C:/Users/Arqjo/bin/node",
+      "runtimeArgs": ["C:/Users/Arqjo/AppData/Local/Temp/serve-estimafacil.js"],
+      "port": 9000
+    }
+  ]
+}

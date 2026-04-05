@@ -1,0 +1,278 @@
+/**
+ * login.tsx
+ * Pantalla de Login — EstimaFácil
+ * Design System: Blueprint Precision
+ */
+
+import {
+  View, Text, TextInput, TouchableOpacity,
+  KeyboardAvoidingView, Platform, ActivityIndicator,
+  Image,
+} from 'react-native';
+import { useState, useEffect } from 'react';
+import { router } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { initDatabase } from '../../db/database';
+
+const STORAGE_KEY_EMAIL    = '@estimafacil:email';
+const STORAGE_KEY_REMEMBER = '@estimafacil:remember';
+const STORAGE_KEY_LOGGED   = '@estimafacil:logged';
+
+export default function LoginScreen() {
+  const [email, setEmail]         = useState('');
+  const [password, setPassword]   = useState('');
+  const [remember, setRemember]   = useState(false);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState('');
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  // ── Auto-login si hay sesión guardada ──────────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      try {
+        await initDatabase();
+        const remembered = await AsyncStorage.getItem(STORAGE_KEY_REMEMBER);
+        if (remembered === 'true') {
+          const savedEmail = await AsyncStorage.getItem(STORAGE_KEY_EMAIL);
+          if (savedEmail) setEmail(savedEmail);
+          const logged = await AsyncStorage.getItem(STORAGE_KEY_LOGGED);
+          if (logged === 'true') {
+            router.replace('/(tabs)');
+            return;
+          }
+        }
+      } catch (e) {
+        console.error('Session check error:', e);
+      } finally {
+        setCheckingSession(false);
+      }
+    })();
+  }, []);
+
+  // ── Login ──────────────────────────────────────────────────────────────────
+  const handleLogin = async () => {
+    if (!email.trim() || !password.trim()) {
+      setError('Ingresa tu correo y contraseña.');
+      return;
+    }
+    setError('');
+    setLoading(true);
+
+    try {
+      // TODO: reemplazar con autenticación real cuando se implemente backend
+      // Por ahora: cualquier email+password válido accede (MVP local)
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        setError('Correo electrónico inválido.');
+        setLoading(false);
+        return;
+      }
+      if (password.length < 6) {
+        setError('La contraseña debe tener al menos 6 caracteres.');
+        setLoading(false);
+        return;
+      }
+
+      if (remember) {
+        await AsyncStorage.setItem(STORAGE_KEY_EMAIL, email.trim());
+        await AsyncStorage.setItem(STORAGE_KEY_REMEMBER, 'true');
+      } else {
+        await AsyncStorage.removeItem(STORAGE_KEY_EMAIL);
+        await AsyncStorage.setItem(STORAGE_KEY_REMEMBER, 'false');
+      }
+      await AsyncStorage.setItem(STORAGE_KEY_LOGGED, 'true');
+
+      router.replace('/(tabs)');
+    } catch (e) {
+      setError('Error al iniciar sesión. Intenta de nuevo.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Loading inicial ────────────────────────────────────────────────────────
+  if (checkingSession) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#f8f9fb', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#003d9b" />
+      </View>
+    );
+  }
+
+  // ── UI ─────────────────────────────────────────────────────────────────────
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={{ flex: 1, backgroundColor: '#f8f9fb' }}
+    >
+      <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 32, paddingBottom: 40 }}>
+
+        {/* Logo / Marca */}
+        <View style={{ alignItems: 'center', marginBottom: 48 }}>
+          <View style={{
+            width: 64, height: 64, borderRadius: 16,
+            backgroundColor: '#003d9b',
+            justifyContent: 'center', alignItems: 'center',
+            marginBottom: 16,
+            shadowColor: '#003d9b',
+            shadowOffset: { width: 0, height: 8 },
+            shadowOpacity: 0.25,
+            shadowRadius: 16,
+            elevation: 8,
+          }}>
+            <Text style={{ fontSize: 28, color: '#ffffff', fontWeight: '800' }}>E</Text>
+          </View>
+          <Text style={{
+            fontSize: 28, fontWeight: '800', color: '#191c1e',
+            fontFamily: 'Manrope', letterSpacing: -0.5,
+          }}>
+            EstimaFácil
+          </Text>
+          <Text style={{
+            fontSize: 13, color: '#737685', marginTop: 4,
+            fontFamily: 'Inter', fontWeight: '500',
+          }}>
+            Control de estimaciones de obra
+          </Text>
+        </View>
+
+        {/* Campos */}
+        <View style={{ gap: 12 }}>
+          {/* Email */}
+          <View>
+            <Text style={{
+              fontSize: 11, fontWeight: '700', color: '#434654',
+              textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6,
+              fontFamily: 'Inter',
+            }}>
+              Correo electrónico
+            </Text>
+            <TextInput
+              value={email}
+              onChangeText={setEmail}
+              placeholder="correo@empresa.com"
+              placeholderTextColor="#c3c6d6"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoComplete="email"
+              style={{
+                backgroundColor: '#e7e8ea',
+                borderRadius: 8,
+                paddingHorizontal: 16,
+                paddingVertical: 14,
+                fontSize: 15,
+                color: '#191c1e',
+                fontFamily: 'Inter',
+                borderBottomWidth: 2,
+                borderBottomColor: '#003d9b',
+              }}
+            />
+          </View>
+
+          {/* Contraseña */}
+          <View>
+            <Text style={{
+              fontSize: 11, fontWeight: '700', color: '#434654',
+              textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6,
+              fontFamily: 'Inter',
+            }}>
+              Contraseña
+            </Text>
+            <TextInput
+              value={password}
+              onChangeText={setPassword}
+              placeholder="••••••••"
+              placeholderTextColor="#c3c6d6"
+              secureTextEntry
+              autoComplete="password"
+              style={{
+                backgroundColor: '#e7e8ea',
+                borderRadius: 8,
+                paddingHorizontal: 16,
+                paddingVertical: 14,
+                fontSize: 15,
+                color: '#191c1e',
+                fontFamily: 'Inter',
+                borderBottomWidth: 2,
+                borderBottomColor: '#003d9b',
+              }}
+            />
+          </View>
+
+          {/* Recordar usuario */}
+          <TouchableOpacity
+            onPress={() => setRemember(!remember)}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4 }}
+            activeOpacity={0.7}
+          >
+            <View style={{
+              width: 20, height: 20, borderRadius: 4,
+              borderWidth: 2,
+              borderColor: remember ? '#003d9b' : '#c3c6d6',
+              backgroundColor: remember ? '#003d9b' : 'transparent',
+              justifyContent: 'center', alignItems: 'center',
+            }}>
+              {remember && (
+                <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '800' }}>✓</Text>
+              )}
+            </View>
+            <Text style={{ fontSize: 13, color: '#434654', fontFamily: 'Inter', fontWeight: '500' }}>
+              Recordar usuario
+            </Text>
+          </TouchableOpacity>
+
+          {/* Error */}
+          {error ? (
+            <View style={{
+              backgroundColor: '#ffdad6', borderRadius: 8,
+              paddingHorizontal: 12, paddingVertical: 10,
+            }}>
+              <Text style={{ fontSize: 12, color: '#93000a', fontFamily: 'Inter', fontWeight: '600' }}>
+                {error}
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Botón Acceder */}
+          <TouchableOpacity
+            onPress={handleLogin}
+            disabled={loading}
+            style={{
+              marginTop: 8,
+              backgroundColor: loading ? '#c3c6d6' : '#003d9b',
+              borderRadius: 12,
+              paddingVertical: 16,
+              alignItems: 'center',
+              shadowColor: '#003d9b',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: loading ? 0 : 0.3,
+              shadowRadius: 12,
+              elevation: loading ? 0 : 6,
+            }}
+            activeOpacity={0.85}
+          >
+            {loading ? (
+              <ActivityIndicator color="#ffffff" />
+            ) : (
+              <Text style={{
+                color: '#ffffff', fontSize: 15, fontWeight: '700',
+                fontFamily: 'Inter', letterSpacing: 0.5,
+              }}>
+                Acceder
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Footer */}
+        <Text style={{
+          textAlign: 'center', marginTop: 32,
+          fontSize: 11, color: '#c3c6d6',
+          fontFamily: 'Inter',
+        }}>
+          EstimaFácil v1.0 · Datos almacenados localmente
+        </Text>
+      </View>
+    </KeyboardAvoidingView>
+  );
+}

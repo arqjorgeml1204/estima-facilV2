@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PDF Extractor Bridge</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+<script>
+(function () {
+  'use strict';
+
+  // Disable web worker — required for WebView / Hermes compatibility.
+  if (typeof pdfjsLib !== 'undefined') {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+  }
+
+  // ── Base64 → Uint8Array (no atob dependency — use when available, fallback otherwise)
+  function base64ToUint8Array(base64) {
+    var binStr = '';
+    try {
+      binStr = atob(base64);
+    } catch (e) {
+      // Manual fallback
+      var B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+      var lookup = new Uint8Array(256);
+      for (var i = 0; i < B64.length; i++) lookup[B64.charCodeAt(i)] = i;
+      var len = base64.length;
+      var bufLen = (len * 3) >> 2;
+      if (base64[len - 1] === '=') bufLen--;
+      if (base64[len - 2] === '=') bufLen--;
+      var bytes = new Uint8Array(bufLen);
+      var p = 0;
+      for (var j = 0; j < len; j += 4) {
+        var e1 = lookup[base64.charCodeAt(j)];
+        var e2 = lookup[base64.charCodeAt(j + 1)];
+        var e3 = lookup[base64.charCodeAt(j + 2)];
+        var e4 = lookup[base64.charCodeAt(j + 3)];
+        bytes[p++] = (e1 << 2) | (e2 >> 4);
+        if (base64[j + 2] !== '=') bytes[p++] = ((e2 & 15) << 4) | (e3 >> 2);
+        if (base64[j + 3] !== '=') bytes[p++] = ((e3 & 3) << 6) | e4;
+      }
+      return bytes;
+    }
+    var bytes = new Uint8Array(binStr.length);
+    for (var k = 0; k < binStr.length; k++) {
+      bytes[k] = binStr.charCodeAt(k);
+    }
+    return bytes;
+  }
+
+  // ── Extract all text lines from a PDF given as base64 string
+  async function extractLines(base64Pdf) {
+    var data = base64ToUint8Array(base64Pdf);
+    var pdf = await pdfjsLib.getDocument({ data: data }).promise;
+    var allLines = [];
+
+    for (var pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      var page = await pdf.getPage(pageNum);
+      var textContent = await page.getTextContent();
+
+      // Group text items by rounded Y coordinate (same visual row)
+      var rowMap = new Map();
+      for (var i = 0; i < textContent.items.length; i++) {
+        var item = textContent.items[i];
+        if (!item.str || !item.str.trim()) continue;
+        var x = item.transform[4];
+        var y = Math.round(item.transform[5]);
+        if (!rowMap.has(y)) rowMap.set(y, []);
+        rowMap.get(y).push({ x: x, str: item.str });
+      }
+
+      // Sort rows top-to-bottom (Y descending in PDF coordinate space)
+      var sortedYs = Array.from(rowMap.keys()).sort(function (a, b) { return b - a; });
+
+      for (var yi = 0; yi < sortedYs.length; yi++) {
+        var y = sortedYs[yi];
+        var items = rowMap.get(y).sort(function (a, b) { return a.x - b.x; });
+        var row = '';
+        var prevX = 0;
+        for (var ii = 0; ii < items.length; ii++) {
+          var itm = items[ii];
+          if (!row) {
+            row = itm.str;
+            prevX = itm.x + itm.str.length * 5;
+          } else {
+            row += (itm.x - prevX > 80 ? '  ' : ' ') + itm.str;
+            prevX = itm.x + itm.str.length * 5;
+          }
+        }
+        allLines.push(row);
+      }
+
+      page.cleanup();
+    }
+
+    return allLines;
+  }
+
+  // ── Message handler: receive { type: 'EXTRACT', id: string, pdf: base64 }
+  //    respond with  { type: 'LINES', id: string, lines: string[] }
+  //               or { type: 'ERROR', id: string, message: string }
+  function postToRN(obj) {
+    var msg = JSON.stringify(obj);
+    // React Native WebView injects window.ReactNativeWebView
+    if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+      window.ReactNativeWebView.postMessage(msg);
+    } else {
+      // Fallback for testing in browser
+      window.parent.postMessage(msg, '*');
+    }
+  }
+
+  window.addEventListener('message', function (event) {
+    var data;
+    try {
+      data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+    } catch (e) {
+      return;
+    }
+
+    if (!data || data.type !== 'EXTRACT') return;
+
+    var id = data.id;
+
+    if (!data.pdf) {
+      postToRN({ type: 'ERROR', id: id, message: 'No PDF data received.' });
+      return;
+    }
+
+    extractLines(data.pdf)
+      .then(function (lines) {
+        postToRN({ type: 'LINES', id: id, lines: lines });
+      })
+      .catch(function (err) {
+        var msg = err && err.message ? err.message : String(err);
+        postToRN({ type: 'ERROR', id: id, message: msg });
+      });
+  });
+
+  // Signal readiness
+  postToRN({ type: 'READY' });
+})();
+</script>
+</body>
+</html>
