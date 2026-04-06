@@ -7,26 +7,38 @@ import {
   View, Text, TextInput, TouchableOpacity,
   SafeAreaView, ScrollView, Alert,
 } from 'react-native';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { upsertEmpresa, getEmpresa } from '../../db/database';
 
 export default function AjustesScreen() {
-  const [nombre, setNombre]   = useState('');
-  const [rfc, setRfc]         = useState('');
   const [saved, setSaved]     = useState(false);
+
+  // useRef para texto libre — evita re-render que destruye el teclado
+  const nombreRef = useRef<string>('');
+  const rfcRef    = useRef<string>('');
+
+  // initialValues solo para defaultValue (se leen una vez al montar)
+  const [initialNombre, setInitialNombre] = useState('');
+  const [initialRfc, setInitialRfc]       = useState('');
 
   useEffect(() => {
     (async () => {
       const empresa = await getEmpresa();
       if (empresa) {
-        setNombre(empresa.nombre ?? '');
-        setRfc(empresa.rfc ?? '');
+        const n = empresa.nombre ?? '';
+        const r = empresa.rfc ?? '';
+        setInitialNombre(n);
+        setInitialRfc(r);
+        nombreRef.current = n;
+        rfcRef.current    = r;
       }
     })();
   }, []);
 
   const handleSave = async () => {
+    const nombre = nombreRef.current;
+    const rfc    = rfcRef.current;
     if (!nombre.trim()) {
       Alert.alert('Campo requerido', 'Ingresa el nombre de tu empresa.');
       return;
@@ -36,7 +48,7 @@ export default function AjustesScreen() {
     setTimeout(() => setSaved(false), 2000);
   };
 
-  const Field = ({ label, value, onChangeText, placeholder, secureTextEntry = false }: any) => (
+  const Field = ({ label, defaultValue, onChangeText, placeholder, secureTextEntry = false }: any) => (
     <View style={{ marginBottom: 16 }}>
       <Text style={{
         fontSize: 11, fontWeight: '700', color: '#434654',
@@ -45,7 +57,8 @@ export default function AjustesScreen() {
         {label}
       </Text>
       <TextInput
-        value={value}
+        key={label}
+        defaultValue={defaultValue}
         onChangeText={onChangeText}
         placeholder={placeholder}
         placeholderTextColor="#c3c6d6"
@@ -86,8 +99,18 @@ export default function AjustesScreen() {
           shadowColor: '#191c1e', shadowOffset: { width: 0, height: 2 },
           shadowOpacity: 0.05, shadowRadius: 6, elevation: 1,
         }}>
-          <Field label="Nombre de la empresa" value={nombre} onChangeText={setNombre} placeholder="Constructora ABC S.A. de C.V." />
-          <Field label="RFC" value={rfc} onChangeText={setRfc} placeholder="XAXX010101000" />
+          <Field
+            label="Nombre de la empresa"
+            defaultValue={initialNombre}
+            onChangeText={(v: string) => { nombreRef.current = v; }}
+            placeholder="Constructora ABC S.A. de C.V."
+          />
+          <Field
+            label="RFC"
+            defaultValue={initialRfc}
+            onChangeText={(v: string) => { rfcRef.current = v; }}
+            placeholder="XAXX010101000"
+          />
         </View>
 
         {/* Guardar */}

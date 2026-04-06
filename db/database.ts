@@ -171,12 +171,13 @@ export async function crearEstimacion(
   numero: number,
   semana: number,
   periodoDesde: string,
-  periodoHasta: string
+  periodoHasta: string,
+  weekNumber: number = 0
 ): Promise<number> {
   const r = await getDb().runAsync(
-    `INSERT INTO estimacion (proyecto_id, numero, semana, periodo_desde, periodo_hasta)
-     VALUES (?,?,?,?,?)`,
-    [proyectoId, numero, semana, periodoDesde, periodoHasta]
+    `INSERT INTO estimacion (proyecto_id, numero, semana, week_number, periodo_desde, periodo_hasta)
+     VALUES (?,?,?,?,?,?)`,
+    [proyectoId, numero, semana, weekNumber, periodoDesde, periodoHasta]
   );
   return r.lastInsertRowId;
 }

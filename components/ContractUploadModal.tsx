@@ -137,25 +137,11 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
               <View style={{ gap: 20 }}>
                 <View style={{
                   backgroundColor: '#f3f4f6', borderRadius: 12,
-                  padding: 16, gap: 12,
+                  padding: 16,
                 }}>
-                  {['Página 1: Nombre del contratista y monto',
-                    'Página 6: Código de conjunto y contrato',
-                    'Página 7+: Notas y catálogo de conceptos',
-                  ].map((item, i) => (
-                    <View key={i} style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}>
-                      <View style={{
-                        width: 20, height: 20, borderRadius: 10,
-                        backgroundColor: '#003d9b',
-                        justifyContent: 'center', alignItems: 'center', marginTop: 1,
-                      }}>
-                        <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>{i + 1}</Text>
-                      </View>
-                      <Text style={{ fontSize: 13, color: '#434654', fontFamily: 'Inter', flex: 1, lineHeight: 20 }}>
-                        {item}
-                      </Text>
-                    </View>
-                  ))}
+                  <Text style={{ fontSize: 14, color: '#434654', fontFamily: 'Inter', textAlign: 'center', lineHeight: 22 }}>
+                    Sube tu contrato para comenzar con la estimación
+                  </Text>
                 </View>
                 <Text style={{ fontSize: 11, color: '#737685', fontFamily: 'Inter', lineHeight: 16 }}>
                   El análisis se realiza localmente en tu dispositivo. No requiere conexión a internet.
@@ -272,7 +258,7 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
                 {onSkip && (
                   <TouchableOpacity onPress={onSkip} style={{ paddingVertical: 10, alignItems: 'center' }}>
                     <Text style={{ fontSize: 13, color: '#737685', fontFamily: 'Inter' }}>
-                      Omitir por ahora
+                      Cerrar
                     </Text>
                   </TouchableOpacity>
                 )}

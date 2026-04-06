@@ -68,6 +68,18 @@ interface ParserContext {
 
 // ─── Extractor class ──────────────────────────────────────────────────────────
 
+// ─── Helper: trim descripcionObra to canonical range ─────────────────────────
+
+function trimDescripcion(raw: string): string {
+  const startMatch = raw.search(/EDIFICACI[OÓ]N\s+DE\s+\d+/i);
+  const endRegex = /DEL\s+FRACCIONAMIENTO\s+[A-ZÁÉÍÓÚÜÑ0-9 ]+/i;
+  const endResult = endRegex.exec(raw);
+  if (startMatch >= 0 && endResult) {
+    return raw.substring(startMatch, endResult.index + endResult[0].length).trim();
+  }
+  return raw;
+}
+
 export class PdfDeterministicExtractor {
   private bridge: PdfBridgeRef;
 
@@ -300,7 +312,7 @@ export class PdfDeterministicExtractor {
       contratista: context.contratista,
       conjunto: context.conjunto,
       numeroContrato: context.numeroContrato,
-      descripcionObra: context.descripcionObra,
+      descripcionObra: trimDescripcion(context.descripcionObra ?? ''),
       montoContrato: context.montoContrato,
       conceptos: Array.from(context.conceptosMap.values()),
     };

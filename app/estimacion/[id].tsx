@@ -22,6 +22,19 @@ import {
   recalcularTotalesEstimacion,
 } from '../../db/database';
 
+// ─── ISO Week ──────────────────────────────────────────────────────────────────
+
+function getISOWeek(d: Date): number {
+  const date = new Date(d);
+  date.setHours(0,0,0,0);
+  date.setDate(date.getDate() + 3 - (date.getDay() + 6) % 7);
+  const week1 = new Date(date.getFullYear(), 0, 4);
+  return 1 + Math.round(((date.getTime() - week1.getTime()) / 86400000
+    - 3 + (week1.getDay() + 6) % 7) / 7);
+}
+
+const currentWeek = getISOWeek(new Date());
+
 // ─── Tipos ─────────────────────────────────────────────────────────────────────
 
 interface Concepto {
@@ -192,13 +205,29 @@ export default function EstimacionGrid() {
     setTotales(t);
   };
 
-  // Tap = +1 (hasta el factor total)
-  const handleTap = (concepto: Concepto) => {
-    const actual = detalles[concepto.id]?.cantidad_esta_est ?? 0;
-    const acum = detalles[concepto.id]?.cantidad_anterior ?? 0;
-    const max = concepto.factor - acum;
-    const next = Math.min(actual + 1, max);
-    updateCantidad(concepto, next);
+  // Tap = toggle per-cell: each cell has state "estimated" | "current" | "empty"
+  // "estimated" = colIdx < cantAnterior  → blocked, do nothing
+  // "current"   = colIdx >= cantAnterior && colIdx < cantAnterior + cantEsta → unmark (–1)
+  // "empty"     = colIdx >= cantAnterior + cantEsta → mark (+1, up to max)
+  const handleCellTap = (concepto: Concepto, colIdx: number) => {
+    const cantAnterior = detalles[concepto.id]?.cantidad_anterior ?? 0;
+    const cantEsta = detalles[concepto.id]?.cantidad_esta_est ?? 0;
+    const isEstimated = colIdx < cantAnterior;
+    const isCurrent = colIdx >= cantAnterior && colIdx < cantAnterior + cantEsta;
+
+    if (isEstimated) {
+      // blocked — do nothing
+      return;
+    } else if (isCurrent) {
+      // unmark: remove this cell (–1)
+      updateCantidad(concepto, cantEsta - 1);
+    } else {
+      // empty: mark this cell (+1, only if it is the next sequential empty cell)
+      const max = concepto.factor - cantAnterior;
+      if (cantEsta < max) {
+        updateCantidad(concepto, cantEsta + 1);
+      }
+    }
   };
 
   // Long press = input manual
@@ -346,7 +375,7 @@ export default function EstimacionGrid() {
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <MaterialIcons name="calendar-today" size={13} color="#003d9b" />
             <Text style={{ fontSize: 11, fontWeight: '700', color: '#434654', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-              Semana actual: <Text style={{ color: '#003d9b' }}>{estimacion?.semana}</Text>
+              Semana actual: <Text style={{ color: '#003d9b' }}>{currentWeek}</Text>
             </Text>
           </View>
           <Text style={{ fontSize: 10, color: '#737685' }}>
@@ -456,7 +485,6 @@ export default function EstimacionGrid() {
 
                         {/* Celdas interactivas */}
                         {Array.from({ length: colCount }, (_, colIdx) => {
-                          const unidad = colIdx + 1;
                           const acumTotal = cantAnterior + cantEsta;
                           const isAnterior = colIdx < cantAnterior;   // estimaciones previas
                           const isEsta = colIdx >= cantAnterior && colIdx < acumTotal; // esta estimación
@@ -471,7 +499,7 @@ export default function EstimacionGrid() {
                                 alignItems: 'center',
                                 justifyContent: 'center',
                               }}
-                              onPress={() => handleTap(concepto)}
+                              onPress={() => handleCellTap(concepto, colIdx)}
                               onLongPress={() => handleLongPress(concepto)}
                               delayLongPress={500}
                               activeOpacity={0.7}
@@ -486,9 +514,14 @@ export default function EstimacionGrid() {
                                 alignItems: 'center',
                                 justifyContent: 'center',
                               }}>
-                                {isDone && (
+                                {isEsta && (
                                   <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
-                                    {unidad}
+                                    {currentWeek}
+                                  </Text>
+                                )}
+                                {isAnterior && (
+                                  <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
+                                    {colIdx + 1}
                                   </Text>
                                 )}
                               </View>

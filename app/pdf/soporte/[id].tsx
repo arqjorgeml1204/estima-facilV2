@@ -5,7 +5,7 @@
 
 import {
   View, Text, TouchableOpacity, ScrollView,
-  ActivityIndicator, SafeAreaView, Platform, Alert,
+  ActivityIndicator, SafeAreaView, Platform, Alert, Share,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useEffect, useState } from 'react';
@@ -215,14 +215,7 @@ export default function PdfSoporte() {
     try {
       const html = buildHtml();
       const { uri } = await Print.printToFileAsync({ html, base64: false });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
-          mimeType: 'application/pdf',
-          dialogTitle: `Estimación #${estimacion?.numero}`,
-        });
-      } else {
-        Alert.alert('PDF generado', `Guardado en:\n${uri}`);
-      }
+      await Share.share({ url: uri, title: 'Estimación PDF' });
     } catch (e) {
       Alert.alert('Error', 'No se pudo generar el PDF.');
     } finally {
@@ -277,10 +270,11 @@ export default function PdfSoporte() {
         <TouchableOpacity
           onPress={handlePrint}
           activeOpacity={0.8}
-          style={{ padding: 8 }}
+          style={{ padding: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}
           disabled={exporting}
         >
-          <MaterialIcons name="print" size={22} color="#003d9b" />
+          <MaterialIcons name="visibility" size={22} color="#003d9b" />
+          <Text style={{ color: '#003d9b', fontSize: 11, fontWeight: '700' }}>PRE VISUALIZAR</Text>
         </TouchableOpacity>
         <TouchableOpacity
           onPress={handleExport}
@@ -294,9 +288,9 @@ export default function PdfSoporte() {
         >
           {exporting
             ? <ActivityIndicator size={14} color="#ffffff" />
-            : <MaterialIcons name="download" size={14} color="#ffffff" />}
+            : <MaterialIcons name="share" size={14} color="#ffffff" />}
           <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '700' }}>
-            {exporting ? 'Generando…' : 'Exportar PDF'}
+            {exporting ? 'Generando…' : 'COMPARTIR PDF'}
           </Text>
         </TouchableOpacity>
       </View>

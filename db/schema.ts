@@ -63,6 +63,7 @@ export interface Estimacion {
   proyectoId: number;
   numero: number;
   semana: number;
+  weekNumber: number;       // ISO week number (ISO 8601)
   periodoDesde: string;
   periodoHasta: string;
   fecha: string;
@@ -164,6 +165,7 @@ export const MIGRATIONS = `
     proyecto_id         INTEGER NOT NULL REFERENCES proyecto(id) ON DELETE CASCADE,
     numero              INTEGER NOT NULL,
     semana              INTEGER NOT NULL,
+    week_number         INTEGER DEFAULT 0,
     periodo_desde       TEXT,
     periodo_hasta       TEXT,
     fecha               TEXT    DEFAULT (datetime('now')),
