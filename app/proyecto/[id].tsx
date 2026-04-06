@@ -5,7 +5,7 @@
 
 import {
   View, Text, TouchableOpacity, FlatList,
-  ActivityIndicator, SafeAreaView, ScrollView,
+  ActivityIndicator, SafeAreaView, ScrollView, Alert,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useEffect, useState, useCallback } from 'react';
@@ -15,6 +15,7 @@ import {
   getProyectoById,
   getEstimacionesByProyecto,
   crearEstimacion,
+  deleteEstimacion,
 } from '../../db/database';
 
 interface Proyecto {
@@ -80,6 +81,31 @@ export default function ProyectoDashboard() {
       proyecto.id, numero, semana, fmt(lunes), fmt(domingo)
     );
     router.push(`/estimacion/${estId}` as any);
+  };
+
+  const handleVerEstimacion = (estId: number) => {
+    router.push({ pathname: '/estimacion/[id]', params: { id: estId, mode: 'view' } } as any);
+  };
+
+  const handleEditarEstimacion = (estId: number) => {
+    router.push(`/estimacion/${estId}` as any);
+  };
+
+  const handleBorrarEstimacion = (estId: number, numero: number) => {
+    Alert.alert(
+      '¿Eliminar estimacion?',
+      `¿Eliminar Estimacion #${numero}? Esta accion no puede deshacerse.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar', style: 'destructive',
+          onPress: async () => {
+            await deleteEstimacion(estId);
+            load();
+          },
+        },
+      ]
+    );
   };
 
   const handleOpenEstimacion = (estId: number) => {
@@ -241,45 +267,84 @@ export default function ProyectoDashboard() {
             </View>
           ) : (
             estimaciones.map((est) => (
-              <TouchableOpacity
+              <View
                 key={est.id}
-                onPress={() => handleOpenEstimacion(est.id)}
-                activeOpacity={0.85}
                 style={{
                   backgroundColor: '#ffffff', borderRadius: 12,
                   padding: 14, marginBottom: 8,
-                  flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
                 }}
               >
-                <View>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '800', color: '#191c1e' }}>
-                      Est. #{est.numero}
-                    </Text>
-                    <View style={{
-                      backgroundColor: est.status === 'finalizada' ? '#a3f69c' : '#e7e8ea',
-                      borderRadius: 4, paddingHorizontal: 6, paddingVertical: 1,
-                    }}>
-                      <Text style={{
-                        fontSize: 9, fontWeight: '700',
-                        color: est.status === 'finalizada' ? '#004f11' : '#737685',
-                        textTransform: 'uppercase', letterSpacing: 0.5,
-                      }}>
-                        {est.status === 'finalizada' ? 'Finalizada' : 'Borrador'}
+                {/* Info row */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                      <Text style={{ fontSize: 13, fontWeight: '800', color: '#191c1e' }}>
+                        Est. #{est.numero}
                       </Text>
+                      <View style={{
+                        backgroundColor: est.status === 'finalizada' ? '#a3f69c' : '#e7e8ea',
+                        borderRadius: 4, paddingHorizontal: 6, paddingVertical: 1,
+                      }}>
+                        <Text style={{
+                          fontSize: 9, fontWeight: '700',
+                          color: est.status === 'finalizada' ? '#004f11' : '#737685',
+                          textTransform: 'uppercase', letterSpacing: 0.5,
+                        }}>
+                          {est.status === 'finalizada' ? 'Finalizada' : 'Borrador'}
+                        </Text>
+                      </View>
                     </View>
+                    <Text style={{ fontSize: 11, color: '#737685' }}>
+                      Sem. {est.semana} · {est.periodo_desde} – {est.periodo_hasta}
+                    </Text>
                   </View>
-                  <Text style={{ fontSize: 11, color: '#737685' }}>
-                    Sem. {est.semana} · {est.periodo_desde} – {est.periodo_hasta}
-                  </Text>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
                   <Text style={{ fontSize: 14, fontWeight: '800', color: '#003d9b' }}>
                     ${(est.total_a_pagar || 0).toLocaleString('es-MX', { minimumFractionDigits: 0 })}
                   </Text>
-                  <MaterialIcons name="chevron-right" size={18} color="#c3c6d6" style={{ marginTop: 2 }} />
                 </View>
-              </TouchableOpacity>
+                {/* Action buttons VER / EDITAR / BORRAR */}
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <TouchableOpacity
+                    onPress={() => handleVerEstimacion(est.id)}
+                    style={{
+                      flex: 1, paddingVertical: 7, borderRadius: 6,
+                      borderWidth: 1.5, borderColor: '#c3c6d6',
+                      alignItems: 'center',
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#737685', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Ver
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => handleEditarEstimacion(est.id)}
+                    style={{
+                      flex: 1, paddingVertical: 7, borderRadius: 6,
+                      backgroundColor: '#003d9b',
+                      alignItems: 'center',
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#ffffff', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Editar
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => handleBorrarEstimacion(est.id, est.numero)}
+                    style={{
+                      flex: 1, paddingVertical: 7, borderRadius: 6,
+                      borderWidth: 1.5, borderColor: '#D32F2F',
+                      alignItems: 'center',
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#D32F2F', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Borrar
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             ))
           )}
         </View>

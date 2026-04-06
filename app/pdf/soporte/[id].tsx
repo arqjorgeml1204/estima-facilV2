@@ -1,6 +1,7 @@
 /**
  * pdf/soporte/[id].tsx
  * Pantalla 2: Soporte de Estimación — genera y exporta PDF oficial.
+ * Cambio 8: Replica formato FORMATO_ESTIMA_FACIL.xlsx (landscape, Excel-style)
  */
 
 import {
@@ -9,6 +10,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
@@ -16,7 +18,10 @@ import {
   initDatabase, getEstimacionById, getProyectoById,
   getDetallesByEstimacion, getEmpresa,
   getEvidenciasByEstimacion, getCroquisByEstimacion,
+  getConceptosByProyecto,
 } from '../../../db/database';
+
+// ── Interfaces ────────────────────────────────────────────────────────────────
 
 interface RowData {
   actividad: string;
@@ -30,6 +35,7 @@ interface RowData {
   importe_acumulado: number;
   avance_financiero: number;
   costo_unitario: number;
+  factor: number;
 }
 
 interface GroupedRow {
@@ -37,6 +43,9 @@ interface GroupedRow {
   descripcion: string;
   unidad: string;
   costo_unitario: number;
+  factor: number;
+  paquete: string;
+  subpaquete: string;
   ant: number;
   estaEstBase: number;
 }
@@ -44,12 +53,62 @@ interface GroupedRow {
 interface ComputedRow extends GroupedRow {
   estaEst: number;
   acum: number;
+  importeContrato: number;
+  importeAnt: number;
   importeEstaEst: number;
+  importeAcum: number;
   avance: number;
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 const fmt = (n: number) =>
   n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const MESES = [
+  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+];
+
+const NUM_TEXT: Record<number, string> = {
+  1: 'UNO', 2: 'DOS', 3: 'TRES', 4: 'CUATRO', 5: 'CINCO',
+  6: 'SEIS', 7: 'SIETE', 8: 'OCHO', 9: 'NUEVE', 10: 'DIEZ',
+  11: 'ONCE', 12: 'DOCE', 13: 'TRECE', 14: 'CATORCE', 15: 'QUINCE',
+  16: 'DIECISÉIS', 17: 'DIECISIETE', 18: 'DIECIOCHO', 19: 'DIECINUEVE', 20: 'VEINTE',
+  21: 'VEINTIUNO', 22: 'VEINTIDÓS', 23: 'VEINTITRÉS', 24: 'VEINTICUATRO', 25: 'VEINTICINCO',
+};
+
+function getISOWeek(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+}
+
+function getWeekMondayAndSaturday(): { lunes: Date; sabado: Date } {
+  const now = new Date();
+  const day = now.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  const lunes = new Date(now);
+  lunes.setDate(now.getDate() + diffToMonday);
+  const sabado = new Date(lunes);
+  sabado.setDate(lunes.getDate() + 5);
+  return { lunes, sabado };
+}
+
+function formatPeriodo(lunes: Date, sabado: Date): string {
+  const dL = lunes.getDate();
+  const dS = sabado.getDate();
+  if (lunes.getMonth() === sabado.getMonth()) {
+    return `del ${dL} al ${dS} de ${MESES[sabado.getMonth()]} del ${sabado.getFullYear()}`;
+  }
+  return `del ${dL} de ${MESES[lunes.getMonth()]} al ${dS} de ${MESES[sabado.getMonth()]} del ${sabado.getFullYear()}`;
+}
+
+// ── Landscape page dimensions (Letter) ────────────────────────────────────────
+const PAGE_WIDTH = 792;
+const PAGE_HEIGHT = 612;
 
 export default function PdfSoporte() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -59,15 +118,23 @@ export default function PdfSoporte() {
   const [proyecto, setProyecto] = useState<any>(null);
   const [empresa, setEmpresa] = useState<any>(null);
   const [detalles, setDetalles] = useState<RowData[]>([]);
+  const [conceptos, setConceptos] = useState<any[]>([]);
   const [evidencias, setEvidencias] = useState<any[]>([]);
   const [croquisList, setCroquisList] = useState<any[]>([]);
   const [editedEstaEst, setEditedEstaEst] = useState<Record<string, string>>({});
   const [editingActividad, setEditingActividad] = useState<string | null>(null);
+  const [obraAsync, setObraAsync] = useState<string>('VISTAS DEL NEVADO');
+  const [frenteAsync, setFrenteAsync] = useState<string>('FRENTE 01');
 
   useEffect(() => {
     (async () => {
       try {
         await initDatabase();
+        // Leer obra y frente desde AsyncStorage
+        const obraVal = await AsyncStorage.getItem('obra');
+        const frenteVal = await AsyncStorage.getItem('frente');
+        if (obraVal) setObraAsync(obraVal);
+        if (frenteVal) setFrenteAsync(frenteVal);
         const est = await getEstimacionById(Number(id));
         if (!est) { setLoading(false); return; }
         const [proy, emp, rows, evs, cros] = await Promise.all([
@@ -77,10 +144,12 @@ export default function PdfSoporte() {
           getEvidenciasByEstimacion(Number(id)),
           getCroquisByEstimacion(Number(id)),
         ]);
+        const conceptosData = proy ? await getConceptosByProyecto(proy.id) : [];
         setEstimacion(est);
         setProyecto(proy);
         setEmpresa(emp);
         setDetalles(rows as RowData[]);
+        setConceptos(conceptosData);
         setEvidencias(evs as any[]);
         setCroquisList(cros as any[]);
       } catch (e) {
@@ -91,17 +160,27 @@ export default function PdfSoporte() {
     })();
   }, [id]);
 
-  // ── Cambio 3b: Agrupar por actividad, sumar cantidades ───────────────────────
+  // ── Lookup map: actividad → concepto (for paquete/subpaquete) ───────────────
+  const conceptoMap: Record<string, any> = {};
+  for (const c of conceptos) {
+    conceptoMap[c.actividad] = c;
+  }
+
+  // ── Agrupar por actividad, sumar cantidades ─────────────────────────────────
   const groupedRows: GroupedRow[] = (() => {
     const map: Record<string, GroupedRow> = {};
     for (const d of detalles) {
       const key = d.actividad;
       if (!map[key]) {
+        const cm = conceptoMap[d.actividad];
         map[key] = {
           actividad: d.actividad,
           descripcion: d.descripcion,
           unidad: d.unidad,
           costo_unitario: d.costo_unitario,
+          factor: d.factor ?? cm?.factor ?? 0,
+          paquete: cm?.paquete ?? '',
+          subpaquete: cm?.subpaquete ?? '',
           ant: 0,
           estaEstBase: 0,
         };
@@ -118,11 +197,14 @@ export default function PdfSoporte() {
       ? parseFloat(editedEstaEst[g.actividad]) || 0
       : g.estaEstBase;
     const acum = g.ant + estaEst;
+    const importeContrato = g.costo_unitario * g.factor;
+    const importeAnt = g.ant * g.costo_unitario;
     const importeEstaEst = estaEst * g.costo_unitario;
-    const avance = proyecto?.monto_contrato
-      ? (acum * g.costo_unitario / proyecto.monto_contrato) * 100
+    const importeAcum = importeAnt + importeEstaEst;
+    const avance = importeContrato > 0
+      ? (importeAcum / importeContrato) * 100
       : 0;
-    return { ...g, estaEst, acum, importeEstaEst, avance };
+    return { ...g, estaEst, acum, importeContrato, importeAnt, importeEstaEst, importeAcum, avance };
   });
 
   // Totales locales recalculados en tiempo real
@@ -130,45 +212,147 @@ export default function PdfSoporte() {
   const localRetencion = localSubtotal * 0.05;
   const localTotal = localSubtotal - localRetencion;
 
-  // ── Cambio 9 + 3b: buildHtml con hojas adicionales y columnas actualizadas ───
+  // Header-level totals
+  const estimadoAcumulado = computedRows.reduce((s, r) => s + r.importeAnt, 0);
+  const porEstimar = Math.max(0, (proyecto?.monto_contrato ?? 0) - estimadoAcumulado - localSubtotal);
+
+  // ── Contratista (extracted from proyecto.nombre "CONJUNTO — CONTRATISTA") ───
+  const contratista = (() => {
+    const n = proyecto?.nombre ?? '';
+    const idx = n.indexOf(' — ');
+    return idx >= 0 ? n.slice(idx + 3) : empresa?.nombre ?? '';
+  })();
+
+  // ── Periodo & semana (calculated fresh, Monday–Saturday) ────────────────────
+  const now = new Date();
+  const semana = getISOWeek(now);
+  const { lunes, sabado } = getWeekMondayAndSaturday();
+  const periodo = formatPeriodo(lunes, sabado);
+  const fechaEst = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
+
+  // ── buildHtml — replica FORMATO_ESTIMA_FACIL.xlsx ───────────────────────────
   const buildHtml = () => {
+    const montoContrato = proyecto?.monto_contrato ?? 0;
+    const numEst = estimacion?.numero ?? 1;
+    const numEstText = NUM_TEXT[numEst] ?? String(numEst);
+    const prototipo = proyecto?.prototipo ?? '';
+    const conjunto = proyecto?.conjunto ?? proyecto?.codigo ?? '';
+    const contrato = proyecto?.numero_contrato ?? '';
+    const frente = frenteAsync;
+    const desarrollo = obraAsync;
+
+    // ── buildHeader: reutilizable para soporte, evidencia, croquis ──────────
     const buildHeader = (sectionTitle: string) => `
-      <div class="header">
-        <div class="header-left">
-          <h1>${empresa?.nombre ?? 'EMPRESA'}</h1>
-          <h2>${sectionTitle}</h2>
-          ${empresa?.rfc ? `<div style="font-size:7.5px;color:#737685;margin-top:2px">RFC: ${empresa.rfc}</div>` : ''}
-        </div>
-        <div class="header-right">
-          <span class="badge">EST. #${estimacion?.numero ?? ''}</span>
-          <div style="font-size:7px;color:#737685;margin-top:4px">
-            ${estimacion?.periodo_desde ?? ''} — ${estimacion?.periodo_hasta ?? ''}
-          </div>
-          <div style="font-size:7px;color:#737685;margin-top:2px">
-            Semana ${estimacion?.semana ?? ''}
-          </div>
-        </div>
-      </div>
-      <div class="meta">
-        <div class="meta-item"><div class="meta-label">Conjunto</div><div class="meta-value">${proyecto?.codigo ?? ''}</div></div>
-        <div class="meta-item"><div class="meta-label">No. Contrato</div><div class="meta-value">${proyecto?.numero_contrato ?? ''}</div></div>
-        <div class="meta-item"><div class="meta-label">Monto Contrato</div><div class="meta-value">$${fmt(proyecto?.monto_contrato ?? 0)}</div></div>
-        <div class="meta-item"><div class="meta-label">Prototipo</div><div class="meta-value">${proyecto?.prototipo ?? ''}</div></div>
-      </div>`;
+      <table class="hdr" cellspacing="0" cellpadding="0">
+        <colgroup>
+          <col style="width:5%"/>
+          <col style="width:16%"/><col style="width:11%"/><col style="width:20%"/>
+          <col style="width:12%"/><col style="width:6%"/><col style="width:6%"/><col style="width:24%"/>
+        </colgroup>
+        <tr style="height:20px">
+          <td rowspan="4" class="logo-cell">&nbsp;</td>
+          <td class="hdr-title">DESARROLLO</td>
+          <td class="hdr-title">FRENTE</td>
+          <td class="hdr-title">CONJUNTO</td>
+          <td class="hdr-title">FECHA DE ESTIMACION</td>
+          <td colspan="2" class="hdr-title">NO. ESTIMACION</td>
+          <td class="hdr-title">MONTO DE CONTRATO</td>
+        </tr>
+        <tr style="height:26px">
+          <td class="hdr-val">${desarrollo}</td>
+          <td class="hdr-val">${frente}</td>
+          <td class="hdr-val">${conjunto}</td>
+          <td class="hdr-val">${fechaEst}</td>
+          <td class="hdr-val">${numEst}</td>
+          <td class="hdr-val" style="font-size:7px">${numEstText}</td>
+          <td class="hdr-val">$ ${fmt(montoContrato)}</td>
+        </tr>
+        <tr style="height:18px">
+          <td class="hdr-title">CONTRATISTA</td>
+          <td class="hdr-title">CONTRATO</td>
+          <td class="hdr-title">PERIODO DE ESTIMACION</td>
+          <td class="hdr-title">ESTIMADO ACUMULADO</td>
+          <td colspan="2" class="hdr-title">ESTA ESTIMACIÓN</td>
+          <td class="hdr-title">POR ESTIMAR</td>
+        </tr>
+        <tr style="height:24px">
+          <td class="hdr-val" style="font-weight:800">${contratista}</td>
+          <td class="hdr-val">${contrato}</td>
+          <td class="hdr-val" style="font-size:7px">${periodo}</td>
+          <td class="hdr-val">$ ${fmt(estimadoAcumulado)}</td>
+          <td colspan="2" class="hdr-val">$ ${fmt(localSubtotal)}</td>
+          <td class="hdr-val">$ ${fmt(porEstimar)}</td>
+        </tr>
+      </table>
+      <table class="subtitle-tbl" cellspacing="0" cellpadding="0">
+        <tr style="height:18px">
+          <td class="subtitle-left">${sectionTitle}</td>
+          <td class="subtitle-sem-label">SEMANA</td>
+          <td class="subtitle-sem-val">${semana}</td>
+        </tr>
+      </table>`;
 
-    const rowsHtml = computedRows.map(r => `
-      <tr>
+    // ── Descripción del contrato ────────────────────────────────────────────
+    const descripcionHtml = proyecto?.descripcion_contrato
+      ? `<table class="desc-tbl" cellspacing="0" cellpadding="0">
+           <tr>
+             <td class="desc-label">DESCRIPCION DEL CONTRATO</td>
+             <td class="desc-val">${proyecto.descripcion_contrato}</td>
+           </tr>
+         </table>`
+      : '';
+
+    // ── Sort + group by paquete ─────────────────────────────────────────────
+    const sorted = [...computedRows].sort((a, b) => {
+      if (a.paquete !== b.paquete) return a.paquete.localeCompare(b.paquete);
+      if (a.subpaquete !== b.subpaquete) return a.subpaquete.localeCompare(b.subpaquete);
+      return a.actividad.localeCompare(b.actividad);
+    });
+
+    const paqueteGroups: { paquete: string; rows: ComputedRow[] }[] = [];
+    let curPaq = '';
+    for (const row of sorted) {
+      if (row.paquete !== curPaq) {
+        paqueteGroups.push({ paquete: row.paquete, rows: [] });
+        curPaq = row.paquete;
+      }
+      paqueteGroups[paqueteGroups.length - 1].rows.push(row);
+    }
+
+    // ── Data rows HTML ──────────────────────────────────────────────────────
+    const bodyHtml = paqueteGroups.map(g => {
+      const groupHeader = `<tr class="grp-hdr"><td colspan="16">${g.paquete || 'SIN PAQUETE'}</td></tr>`;
+      const rows = g.rows.map(r => `<tr>
+        <td class="c">${prototipo}</td>
+        <td class="txt">${r.paquete}</td>
+        <td class="txt">${r.subpaquete}</td>
         <td class="act">${r.actividad}</td>
-        <td class="desc">${r.descripcion}</td>
-        <td class="center">${r.unidad}</td>
-        <td class="num">${fmt(r.ant)}</td>
-        <td class="num">${fmt(r.estaEst)}</td>
-        <td class="num">${fmt(r.acum)}</td>
-        <td class="num">${r.avance.toFixed(1)}%</td>
-        <td class="num imp">$${fmt(r.importeEstaEst)}</td>
+        <td class="txt desc-col">${r.descripcion}</td>
+        <td class="c">${r.unidad}</td>
+        <td class="n">$ ${fmt(r.costo_unitario)}</td>
+        <td class="c">${r.factor}</td>
+        <td class="n">$ ${fmt(r.importeContrato)}</td>
+        <td class="n">${fmt(r.ant)}</td>
+        <td class="n">${fmt(r.estaEst)}</td>
+        <td class="n">${fmt(r.acum)}</td>
+        <td class="n">$ ${fmt(r.importeAnt)}</td>
+        <td class="n hi">$ ${fmt(r.importeEstaEst)}</td>
+        <td class="n">$ ${fmt(r.importeAcum)}</td>
+        <td class="c">${r.avance.toFixed(1)}%</td>
       </tr>`).join('');
+      return groupHeader + rows;
+    }).join('');
 
-    // Hoja 2: Evidencia fotográfica (condicional, máx 4 fotos/página)
+    // ── Totals for data table columns ───────────────────────────────────────
+    const totalImporteContrato = computedRows.reduce((s, r) => s + r.importeContrato, 0);
+    const totalAntVol = computedRows.reduce((s, r) => s + r.ant, 0);
+    const totalEstaVol = computedRows.reduce((s, r) => s + r.estaEst, 0);
+    const totalAcumVol = computedRows.reduce((s, r) => s + r.acum, 0);
+    const totalAntImp = estimadoAcumulado;
+    const totalAcumImp = computedRows.reduce((s, r) => s + r.importeAcum, 0);
+    const totalAvance = totalImporteContrato > 0 ? (totalAcumImp / totalImporteContrato) * 100 : 0;
+
+    // ── Hoja 2: Evidencia fotográfica (condicional) ─────────────────────────
     let evidenciaPages = '';
     if (evidencias.length > 0) {
       const chunks: any[][] = [];
@@ -178,16 +362,16 @@ export default function PdfSoporte() {
           ${buildHeader('EVIDENCIA FOTOGRÁFICA')}
           <div class="section-title">EVIDENCIA FOTOGRÁFICA</div>
           <div class="foto-grid">
-            ${chunk.map((f, fi) => `
+            ${chunk.map((f: any, fi: number) => `
               <div class="foto-cell">
-                <img src="${f.imagen_uri}" style="width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:4px;border:1px solid #e1e2e4;"/>
+                <img src="${f.imagen_uri}" class="foto-img"/>
                 <div class="media-label">${pi * 4 + fi + 1}. ${f.descripcion || f.actividad || ''}</div>
               </div>`).join('')}
           </div>
         </div>`).join('');
     }
 
-    // Hoja 3: Croquis (condicional, máx 2 por página)
+    // ── Hoja 3: Croquis (condicional) ───────────────────────────────────────
     let croquesPages = '';
     if (croquisList.length > 0) {
       const chunks: any[][] = [];
@@ -197,98 +381,167 @@ export default function PdfSoporte() {
           ${buildHeader('CROQUIS')}
           <div class="section-title">CROQUIS</div>
           <div style="display:flex;flex-direction:column;gap:16px;align-items:center;">
-            ${chunk.map((c, ci) => `
+            ${chunk.map((c: any, ci: number) => `
               <div style="width:100%;text-align:center;">
-                <img src="${c.imagen_uri}" style="max-width:100%;max-height:320px;object-fit:contain;border-radius:4px;border:1px solid #e1e2e4;"/>
+                <img src="${c.imagen_uri}" style="max-width:100%;max-height:300px;object-fit:contain;border-radius:4px;border:1px solid #bbb;"/>
                 <div class="media-label">${pi * 2 + ci + 1}. ${c.descripcion || ''}</div>
               </div>`).join('')}
           </div>
         </div>`).join('');
     }
 
+    // ── Full HTML ───────────────────────────────────────────────────────────
     return `<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8"/>
 <style>
+  @page { size: letter landscape; margin: 8mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 8px; color: #1a1a1a; padding: 16px; }
-  h1 { font-size: 13px; color: #003d9b; font-weight: 800; }
-  h2 { font-size: 10px; color: #003d9b; font-weight: 700; margin-top: 4px; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; border-bottom: 2px solid #003d9b; padding-bottom: 8px; }
-  .header-left { flex: 1; }
-  .header-right { text-align: right; }
-  .badge { display: inline-block; background: #003d9b; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 9px; font-weight: 700; }
-  .meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
-  .meta-item { background: #f4f5f8; border-radius: 4px; padding: 5px 7px; }
-  .meta-label { font-size: 7px; color: #737685; text-transform: uppercase; letter-spacing: .5px; font-weight: 700; }
-  .meta-value { font-size: 9px; color: #191c1e; font-weight: 700; margin-top: 1px; }
-  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-  th { background: #003d9b; color: #fff; font-size: 7px; font-weight: 700; padding: 4px 3px; text-align: center; text-transform: uppercase; letter-spacing: .3px; }
-  td { padding: 3px; border-bottom: 1px solid #e8e9ec; font-size: 7.5px; vertical-align: top; }
-  tr:nth-child(even) td { background: #f8f9fb; }
-  .act { font-weight: 700; color: #003d9b; white-space: nowrap; }
-  .desc { max-width: 140px; }
-  .center { text-align: center; }
-  .num { text-align: right; white-space: nowrap; }
-  .imp { font-weight: 700; color: #004f11; }
-  .totals { margin-top: 12px; display: flex; justify-content: flex-end; }
-  .totals-box { border: 1px solid #e1e2e4; border-radius: 6px; padding: 10px 14px; min-width: 220px; }
-  .total-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; }
-  .total-row.main { border-top: 2px solid #003d9b; margin-top: 4px; padding-top: 6px; }
-  .total-label { font-size: 8px; color: #434654; }
-  .total-value { font-size: 9px; font-weight: 700; }
-  .total-value.green { color: #004f11; font-size: 11px; }
-  .footer { margin-top: 20px; display: flex; justify-content: space-around; }
-  .firma { text-align: center; border-top: 1px solid #aaa; padding-top: 4px; min-width: 140px; font-size: 7.5px; color: #737685; }
-  .page-break { page-break-before: always; padding-top: 16px; }
-  .section-title { font-size: 11px; font-weight: 700; color: #003d9b; text-transform: uppercase; letter-spacing: 1px; margin: 4px 0 12px; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 7px; color: #000; padding: 0; }
+
+  /* ── Header table ─────────────────────────────────────── */
+  .hdr { width: 100%; border-collapse: collapse; margin-bottom: 0; }
+  .hdr td { border: 1px solid #000; padding: 2px 4px; font-size: 8px; }
+  .logo-cell { width: 5%; text-align: center; vertical-align: middle; background: #fff; font-size: 7px; color: #999; }
+  .hdr-title { background: #1F4E79; color: #fff; font-weight: 700; font-size: 9px; text-align: center; vertical-align: middle; }
+  .hdr-val { background: #FFFFCC; font-weight: 700; font-size: 9px; text-align: center; vertical-align: middle; }
+
+  /* ── Subtitle row (Row 7) ─────────────────────────────── */
+  .subtitle-tbl { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
+  .subtitle-tbl td { border: 1px solid #000; padding: 3px 6px; }
+  .subtitle-left { width: 76%; font-weight: 700; font-size: 10px; background: #D6E4F0; }
+  .subtitle-sem-label { width: 12%; font-weight: 700; font-size: 10px; text-align: center; background: #1F4E79; color: #fff; }
+  .subtitle-sem-val { width: 12%; font-weight: 700; font-size: 14px; text-align: center; background: #FFFFCC; }
+
+  /* ── Description row ──────────────────────────────────── */
+  .desc-tbl { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
+  .desc-tbl td { border: 1px solid #000; padding: 3px 6px; font-size: 8px; }
+  .desc-label { width: 18%; font-weight: 700; background: #D6E4F0; }
+  .desc-val { background: #FFFFCC; word-wrap: break-word; }
+
+  /* ── Data table ───────────────────────────────────────── */
+  .data { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .data th, .data td { border: 1px solid #000; padding: 1px 2px; overflow: hidden; text-overflow: ellipsis; }
+  .data th { font-size: 6px; font-weight: 700; text-align: center; vertical-align: middle; white-space: normal; word-wrap: break-word; }
+  .th1 { background: #1F4E79; color: #fff; }
+  .th2 { background: #2E75B6; color: #fff; }
+  .data td { font-size: 6.5px; vertical-align: top; }
+  .grp-hdr td { background: #D6E4F0; font-weight: 700; font-size: 7px; padding: 3px 4px; }
+  .act { font-weight: 700; color: #1F4E79; white-space: nowrap; }
+  .txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .desc-col { white-space: normal; word-wrap: break-word; }
+  .c { text-align: center; }
+  .n { text-align: right; white-space: nowrap; }
+  .hi { font-weight: 700; color: #006100; }
+
+  /* ── Footer totals ────────────────────────────────────── */
+  .footer-row td { font-weight: 700; font-size: 8px; border: 1px solid #000; padding: 3px 4px; }
+  .footer-label { text-align: right; background: #D6E4F0; }
+  .footer-val { text-align: right; background: #FFFFCC; }
+  .footer-total td { font-size: 9px; }
+  .footer-total .footer-val { color: #006100; font-size: 10px; }
+
+  /* ── Firmas ───────────────────────────────────────────── */
+  .firmas { margin-top: 30px; display: flex; justify-content: space-around; }
+  .firma { text-align: center; border-top: 1px solid #000; padding-top: 4px; min-width: 150px; font-size: 8px; font-weight: 700; }
+
+  /* ── Page break + sections ────────────────────────────── */
+  .page-break { page-break-before: always; padding-top: 8px; }
+  .section-title { font-size: 11px; font-weight: 700; color: #1F4E79; text-transform: uppercase; letter-spacing: 1px; margin: 4px 0 12px; }
   .foto-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .media-label { font-size: 7.5px; color: #737685; margin-top: 4px; text-align: center; }
+  .foto-cell { text-align: center; }
+  .foto-img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 4px; border: 1px solid #bbb; }
+  .media-label { font-size: 7.5px; color: #555; margin-top: 4px; text-align: center; }
 </style>
 </head>
 <body>
-${buildHeader('SOPORTE DE ESTIMACIÓN')}
 
-<table>
+${buildHeader('SOPORTE DE ESTIMACION')}
+${descripcionHtml}
+
+<table class="data" cellspacing="0" cellpadding="0">
+  <colgroup>
+    <col style="width:4%"/>
+    <col style="width:10%"/>
+    <col style="width:9%"/>
+    <col style="width:8%"/>
+    <col style="width:11%"/>
+    <col style="width:3%"/>
+    <col style="width:5%"/>
+    <col style="width:4%"/>
+    <col style="width:7%"/>
+    <col style="width:4%"/>
+    <col style="width:4%"/>
+    <col style="width:4%"/>
+    <col style="width:7%"/>
+    <col style="width:7%"/>
+    <col style="width:7%"/>
+    <col style="width:4%"/>
+  </colgroup>
   <thead>
     <tr>
-      <th>Actividad</th>
-      <th>Descripción</th>
-      <th>U.</th>
-      <th>ANT. (Vol)</th>
-      <th>ESTA EST. (Vol)</th>
-      <th>ACUM. (Vol)</th>
-      <th>Avance %</th>
-      <th>Imp. Esta Est.</th>
+      <th rowspan="2" class="th1">PROTO-<br/>TIPO</th>
+      <th rowspan="2" class="th1">PAQUETE</th>
+      <th rowspan="2" class="th1">SUB-<br/>PAQUETE</th>
+      <th rowspan="2" class="th1">ACTIVIDAD</th>
+      <th rowspan="2" class="th1">DESCRIPCION</th>
+      <th colspan="4" class="th1">CONTRATO</th>
+      <th colspan="3" class="th1">VOLUMENES ESTIMADOS DE OBRA</th>
+      <th colspan="3" class="th1">IMPORTES ESTIMADOS DE OBRA</th>
+      <th rowspan="2" class="th1">AVANCE<br/>%</th>
+    </tr>
+    <tr>
+      <th class="th2">UNIDAD</th>
+      <th class="th2">C. UNIT.</th>
+      <th class="th2">FACTOR</th>
+      <th class="th2">IMPORTE</th>
+      <th class="th2">ANTERIOR</th>
+      <th class="th2">ESTA EST.</th>
+      <th class="th2">ACUM.</th>
+      <th class="th2">ANTERIOR</th>
+      <th class="th2">ESTA EST.</th>
+      <th class="th2">ACUM.</th>
     </tr>
   </thead>
   <tbody>
-    ${rowsHtml}
+    ${bodyHtml}
+    <tr class="footer-row">
+      <td colspan="8" class="footer-label">TOTALES</td>
+      <td class="footer-val">$ ${fmt(totalImporteContrato)}</td>
+      <td class="footer-val">${fmt(totalAntVol)}</td>
+      <td class="footer-val">${fmt(totalEstaVol)}</td>
+      <td class="footer-val">${fmt(totalAcumVol)}</td>
+      <td class="footer-val">$ ${fmt(totalAntImp)}</td>
+      <td class="footer-val" style="color:#006100">$ ${fmt(localSubtotal)}</td>
+      <td class="footer-val">$ ${fmt(totalAcumImp)}</td>
+      <td class="footer-val">${totalAvance.toFixed(1)}%</td>
+    </tr>
   </tbody>
 </table>
 
-<div class="totals">
-  <div class="totals-box">
-    <div class="total-row">
-      <span class="total-label">Subtotal</span>
-      <span class="total-value">$${fmt(localSubtotal)}</span>
-    </div>
-    <div class="total-row">
-      <span class="total-label">Retención (5%)</span>
-      <span class="total-value" style="color:#c0392b">-$${fmt(localRetencion)}</span>
-    </div>
-    <div class="total-row main">
-      <span class="total-label" style="font-weight:700;font-size:9px">TOTAL A PAGAR</span>
-      <span class="total-value green">$${fmt(localTotal)}</span>
-    </div>
-  </div>
-</div>
+<table style="width:100%;border-collapse:collapse;margin-top:8px;" cellspacing="0">
+  <tr class="footer-row">
+    <td style="width:75%;border:none;"></td>
+    <td class="footer-label" style="width:13%">SUBTOTAL ESTIMACIÓN</td>
+    <td class="footer-val" style="width:12%">$ ${fmt(localSubtotal)}</td>
+  </tr>
+  <tr class="footer-row">
+    <td style="border:none;"></td>
+    <td class="footer-label">RETENCIÓN (F.G.) 5%</td>
+    <td class="footer-val" style="color:#c0392b">-$ ${fmt(localRetencion)}</td>
+  </tr>
+  <tr class="footer-row footer-total">
+    <td style="border:none;"></td>
+    <td class="footer-label" style="font-size:10px">TOTAL A PAGAR</td>
+    <td class="footer-val">$ ${fmt(localTotal)}</td>
+  </tr>
+</table>
 
-<div class="footer">
-  <div class="firma"><div style="margin-bottom:20px"></div>ELABORÓ</div>
-  <div class="firma"><div style="margin-bottom:20px"></div>REVISÓ</div>
-  <div class="firma"><div style="margin-bottom:20px"></div>AUTORIZÓ</div>
+<div class="firmas">
+  <div class="firma"><div style="margin-bottom:30px"></div>ELABORÓ</div>
+  <div class="firma"><div style="margin-bottom:30px"></div>REVISÓ</div>
+  <div class="firma"><div style="margin-bottom:30px"></div>AUTORIZÓ</div>
 </div>
 
 ${evidenciaPages}
@@ -301,7 +554,12 @@ ${croquesPages}
     setExporting(true);
     try {
       const html = buildHtml();
-      const { uri } = await Print.printToFileAsync({ html, base64: false });
+      const { uri } = await Print.printToFileAsync({
+        html,
+        base64: false,
+        width: PAGE_WIDTH,
+        height: PAGE_HEIGHT,
+      });
       await Share.share({ url: uri, title: 'Estimación PDF' });
     } catch (e) {
       Alert.alert('Error', 'No se pudo generar el PDF.');
@@ -313,7 +571,11 @@ ${croquesPages}
   const handlePrint = async () => {
     setExporting(true);
     try {
-      await Print.printAsync({ html: buildHtml() });
+      await Print.printAsync({
+        html: buildHtml(),
+        width: PAGE_WIDTH,
+        height: PAGE_HEIGHT,
+      });
     } catch { /* cancelled */ }
     finally { setExporting(false); }
   };
@@ -432,7 +694,7 @@ ${croquesPages}
           </View>
         </View>
 
-        {/* Cambio 3b: Conceptos agrupados con edición inline */}
+        {/* Conceptos agrupados con edición inline */}
         <View style={{ paddingHorizontal: 16, marginBottom: 8 }}>
           <Text style={{ fontSize: 11, fontWeight: '700', color: '#737685', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
             {computedRows.length} CONCEPTOS SELECCIONADOS

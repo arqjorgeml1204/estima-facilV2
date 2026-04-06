@@ -7,7 +7,7 @@
 import {
   View, Text, TextInput, TouchableOpacity,
   KeyboardAvoidingView, Platform, ActivityIndicator,
-  Image,
+  Alert,
 } from 'react-native';
 import { useState, useEffect } from 'react';
 import { router } from 'expo-router';
@@ -19,11 +19,12 @@ const STORAGE_KEY_REMEMBER = '@estimafacil:remember';
 const STORAGE_KEY_LOGGED   = '@estimafacil:logged';
 
 export default function LoginScreen() {
-  const [email, setEmail]         = useState('');
-  const [password, setPassword]   = useState('');
-  const [remember, setRemember]   = useState(false);
-  const [loading, setLoading]     = useState(false);
-  const [error, setError]         = useState('');
+  const [email, setEmail]             = useState('');
+  const [password, setPassword]       = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [remember, setRemember]       = useState(false);
+  const [loading, setLoading]         = useState(false);
+  const [error, setError]             = useState('');
   const [checkingSession, setCheckingSession] = useState(true);
 
   // ── Auto-login si hay sesión guardada ──────────────────────────────────────
@@ -178,25 +179,40 @@ export default function LoginScreen() {
             }}>
               Contraseña
             </Text>
-            <TextInput
-              value={password}
-              onChangeText={setPassword}
-              placeholder="••••••••"
-              placeholderTextColor="#c3c6d6"
-              secureTextEntry
-              autoComplete="password"
-              style={{
-                backgroundColor: '#e7e8ea',
-                borderRadius: 8,
-                paddingHorizontal: 16,
-                paddingVertical: 14,
-                fontSize: 15,
-                color: '#191c1e',
-                fontFamily: 'Inter',
-                borderBottomWidth: 2,
-                borderBottomColor: '#003d9b',
-              }}
-            />
+            <View style={{ position: 'relative' }}>
+              <TextInput
+                value={password}
+                onChangeText={setPassword}
+                placeholder="••••••••"
+                placeholderTextColor="#c3c6d6"
+                secureTextEntry={!showPassword}
+                autoComplete="password"
+                style={{
+                  backgroundColor: '#e7e8ea',
+                  borderRadius: 8,
+                  paddingHorizontal: 16,
+                  paddingRight: 48,
+                  paddingVertical: 14,
+                  fontSize: 15,
+                  color: '#191c1e',
+                  fontFamily: 'Inter',
+                  borderBottomWidth: 2,
+                  borderBottomColor: '#003d9b',
+                }}
+              />
+              <TouchableOpacity
+                onPress={() => setShowPassword(!showPassword)}
+                style={{
+                  position: 'absolute', right: 12, top: 0, bottom: 0,
+                  justifyContent: 'center', paddingHorizontal: 4,
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={{ fontSize: 18, color: '#737685' }}>
+                  {showPassword ? '🙈' : '👁'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Recordar usuario */}
@@ -233,7 +249,7 @@ export default function LoginScreen() {
             </View>
           ) : null}
 
-          {/* Botón Acceder */}
+          {/* Botón LOG IN */}
           <TouchableOpacity
             onPress={handleLogin}
             disabled={loading}
@@ -256,11 +272,46 @@ export default function LoginScreen() {
             ) : (
               <Text style={{
                 color: '#ffffff', fontSize: 15, fontWeight: '700',
-                fontFamily: 'Inter', letterSpacing: 0.5,
+                fontFamily: 'Inter', letterSpacing: 1,
               }}>
-                Acceder
+                LOG IN
               </Text>
             )}
+          </TouchableOpacity>
+
+          {/* ¿Olvidaste tu contraseña? */}
+          <TouchableOpacity
+            onPress={() => Alert.alert('Próximamente', 'Función próximamente disponible.')}
+            style={{ alignItems: 'center', paddingVertical: 4 }}
+            activeOpacity={0.7}
+          >
+            <Text style={{
+              fontSize: 13, color: '#003d9b', fontFamily: 'Inter',
+              fontWeight: '600', textDecorationLine: 'underline',
+            }}>
+              ¿Olvidaste tu contraseña?
+            </Text>
+          </TouchableOpacity>
+
+          {/* Botón REGISTRARSE GRATIS */}
+          <TouchableOpacity
+            onPress={() => router.push('/(auth)/register')}
+            style={{
+              borderRadius: 12,
+              paddingVertical: 16,
+              alignItems: 'center',
+              borderWidth: 2,
+              borderColor: '#003d9b',
+              backgroundColor: 'transparent',
+            }}
+            activeOpacity={0.8}
+          >
+            <Text style={{
+              color: '#003d9b', fontSize: 15, fontWeight: '700',
+              fontFamily: 'Inter', letterSpacing: 1,
+            }}>
+              REGISTRARSE GRATIS
+            </Text>
           </TouchableOpacity>
         </View>
 

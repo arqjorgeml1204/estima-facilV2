@@ -156,8 +156,9 @@ function InputModal({
 // ─── Pantalla Principal ────────────────────────────────────────────────────────
 
 export default function EstimacionGrid() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, mode } = useLocalSearchParams<{ id: string; mode?: string }>();
   const estId = Number(id);
+  const isViewMode = mode === 'view';
 
   const [estimacion, setEstimacion]  = useState<any>(null);
   const [proyecto, setProyecto]      = useState<any>(null);
@@ -269,6 +270,7 @@ export default function EstimacionGrid() {
   //   "current"         → seleccionada en esta sesión
   //   "empty"           → disponible
   const handleCellTap = (concepto: Concepto, colIdx: number) => {
+    if (isViewMode) return; // view mode: read-only
     if (modoActualizacion) return; // en modo actualización el tap individual no aplica
 
     const cantAnterior = detalles[concepto.id]?.cantidad_anterior ?? 0;
@@ -298,6 +300,7 @@ export default function EstimacionGrid() {
 
   // Long press = input manual (solo en modo normal)
   const handleLongPress = (concepto: Concepto) => {
+    if (isViewMode) return;
     if (modoActualizacion) return;
     setModalConcepto(concepto);
     setModalVisible(true);
@@ -467,8 +470,8 @@ export default function EstimacionGrid() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
 
-      {/* ── 2d: Banner Modo Actualización ── */}
-      {modoActualizacion && (
+      {/* ── 2d: Banner Modo Actualización - never shown in view mode ── */}
+      {modoActualizacion && !isViewMode && (
         <View style={{
           backgroundColor: '#0D47A1', paddingVertical: 10, paddingHorizontal: 16,
           alignItems: 'center',
@@ -520,13 +523,15 @@ export default function EstimacionGrid() {
             </Text>
           </View>
         </View>
-        {/* 2d: Kebab menu button */}
-        <TouchableOpacity
-          style={{ padding: 6, borderRadius: 99 }}
-          onPress={() => setMenuVisible(true)}
-        >
-          <MaterialIcons name="more-vert" size={22} color="#003d9b" />
-        </TouchableOpacity>
+        {/* 2d: Kebab menu button - hidden in view mode */}
+        {!isViewMode && (
+          <TouchableOpacity
+            style={{ padding: 6, borderRadius: 99 }}
+            onPress={() => setMenuVisible(true)}
+          >
+            <MaterialIcons name="more-vert" size={22} color="#003d9b" />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* ── 2d: Kebab Menu Modal ── */}
@@ -838,7 +843,7 @@ export default function EstimacionGrid() {
       </View>
 
       {/* ── Botones Evidencia / Croquis (modo normal) ── */}
-      {!modoActualizacion && (
+      {!modoActualizacion && !isViewMode && (
         <View style={{
           paddingHorizontal: 16, paddingVertical: 10,
           flexDirection: 'row', gap: 10,
@@ -896,24 +901,26 @@ export default function EstimacionGrid() {
             </Text>
           </View>
 
-          {/* Guardar */}
-          <TouchableOpacity
-            onPress={handleGuardar}
-            disabled={saving}
-            style={{
-              flex: 1, alignItems: 'center', justifyContent: 'center',
-              paddingVertical: 8,
-            }}
-            activeOpacity={0.7}
-          >
-            {saving
-              ? <ActivityIndicator size="small" color="#003d9b" />
-              : <MaterialIcons name="save" size={20} color="#191c1e" />
-            }
-            <Text style={{ fontSize: 9, fontWeight: '700', color: '#191c1e', textTransform: 'uppercase', letterSpacing: 1, marginTop: 2 }}>
-              Guardar
-            </Text>
-          </TouchableOpacity>
+          {/* Guardar - hidden in view mode */}
+          {!isViewMode && (
+            <TouchableOpacity
+              onPress={handleGuardar}
+              disabled={saving}
+              style={{
+                flex: 1, alignItems: 'center', justifyContent: 'center',
+                paddingVertical: 8,
+              }}
+              activeOpacity={0.7}
+            >
+              {saving
+                ? <ActivityIndicator size="small" color="#003d9b" />
+                : <MaterialIcons name="save" size={20} color="#191c1e" />
+              }
+              <Text style={{ fontSize: 9, fontWeight: '700', color: '#191c1e', textTransform: 'uppercase', letterSpacing: 1, marginTop: 2 }}>
+                Guardar
+              </Text>
+            </TouchableOpacity>
+          )}
 
           {/* PDF */}
           <TouchableOpacity

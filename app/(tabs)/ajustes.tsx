@@ -1,6 +1,7 @@
 /**
  * ajustes.tsx
- * Pantalla de configuración: nombre empresa, RFC.
+ * Pantalla de configuracion rediseñada — Wave 3F/Cambio 4b
+ * Secciones: MI EMPRESA / MI CUENTA / SUSCRIPCION
  */
 
 import {
@@ -9,46 +10,52 @@ import {
 } from 'react-native';
 import { useState, useEffect, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
-import { upsertEmpresa, getEmpresa } from '../../db/database';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function AjustesScreen() {
-  const [saved, setSaved]     = useState(false);
+  // useRef pattern — evita re-render que destruye el teclado
+  const obraRef   = useRef<string>('VISTAS DEL NEVADO');
+  const frenteRef = useRef<string>('FRENTE 01');
 
-  // useRef para texto libre — evita re-render que destruye el teclado
-  const nombreRef = useRef<string>('');
-  const rfcRef    = useRef<string>('');
+  const [initialObra,   setInitialObra]   = useState('VISTAS DEL NEVADO');
+  const [initialFrente, setInitialFrente] = useState('FRENTE 01');
 
-  // initialValues solo para defaultValue (se leen una vez al montar)
-  const [initialNombre, setInitialNombre] = useState('');
-  const [initialRfc, setInitialRfc]       = useState('');
+  const [editingPassword, setEditingPassword] = useState(false);
+  const [showCurrentPass, setShowCurrentPass] = useState(false);
+  const [showNewPass,     setShowNewPass]     = useState(false);
+  const [showConfirmPass, setShowConfirmPass] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword,     setNewPassword]     = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   useEffect(() => {
     (async () => {
-      const empresa = await getEmpresa();
-      if (empresa) {
-        const n = empresa.nombre ?? '';
-        const r = empresa.rfc ?? '';
-        setInitialNombre(n);
-        setInitialRfc(r);
-        nombreRef.current = n;
-        rfcRef.current    = r;
-      }
+      const obra   = await AsyncStorage.getItem('obra');
+      const frente = await AsyncStorage.getItem('frente');
+      if (obra)   { setInitialObra(obra);     obraRef.current   = obra; }
+      if (frente) { setInitialFrente(frente); frenteRef.current = frente; }
     })();
   }, []);
 
   const handleSave = async () => {
-    const nombre = nombreRef.current;
-    const rfc    = rfcRef.current;
-    if (!nombre.trim()) {
-      Alert.alert('Campo requerido', 'Ingresa el nombre de tu empresa.');
+    if (editingPassword && newPassword !== confirmPassword) {
+      Alert.alert('Error', 'La nueva contrasena y la confirmacion no coinciden.');
       return;
     }
-    await upsertEmpresa(nombre.trim(), rfc.trim() || undefined);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    await AsyncStorage.setItem('obra',   obraRef.current   || 'VISTAS DEL NEVADO');
+    await AsyncStorage.setItem('frente', frenteRef.current || 'FRENTE 01');
+    if (editingPassword) {
+      // TODO: AuthService.updatePassword(currentPassword, newPassword)
+    }
+    Alert.alert('Guardado', 'Cambios guardados correctamente');
   };
 
-  const Field = ({ label, defaultValue, onChangeText, placeholder, secureTextEntry = false }: any) => (
+  const RefField = ({
+    label, defaultValue, onChangeText, placeholder,
+  }: {
+    label: string; defaultValue: string;
+    onChangeText: (v: string) => void; placeholder?: string;
+  }) => (
     <View style={{ marginBottom: 16 }}>
       <Text style={{
         fontSize: 11, fontWeight: '700', color: '#434654',
@@ -62,7 +69,6 @@ export default function AjustesScreen() {
         onChangeText={onChangeText}
         placeholder={placeholder}
         placeholderTextColor="#c3c6d6"
-        secureTextEntry={secureTextEntry}
         autoCapitalize="none"
         style={{
           backgroundColor: '#e7e8ea', borderRadius: 8,
@@ -71,6 +77,65 @@ export default function AjustesScreen() {
           borderBottomWidth: 2, borderBottomColor: '#003d9b',
         }}
       />
+    </View>
+  );
+
+  const SectionTitle = ({ label }: { label: string }) => (
+    <Text style={{
+      fontSize: 11, fontWeight: '700', color: '#003d9b',
+      textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12,
+    }}>
+      {label}
+    </Text>
+  );
+
+  const Card = ({ children }: { children: React.ReactNode }) => (
+    <View style={{
+      backgroundColor: '#ffffff', borderRadius: 12,
+      padding: 16, marginBottom: 24,
+      shadowColor: '#191c1e', shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.05, shadowRadius: 6, elevation: 1,
+    }}>
+      {children}
+    </View>
+  );
+
+  const PasswordField = ({
+    label, value, onChangeText, show, onToggle,
+  }: {
+    label: string; value: string;
+    onChangeText: (v: string) => void;
+    show: boolean; onToggle: () => void;
+  }) => (
+    <View style={{ marginBottom: 16 }}>
+      <Text style={{
+        fontSize: 11, fontWeight: '700', color: '#434654',
+        textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6,
+      }}>
+        {label}
+      </Text>
+      <View style={{
+        flexDirection: 'row', alignItems: 'center',
+        backgroundColor: '#e7e8ea', borderRadius: 8,
+        borderBottomWidth: 2, borderBottomColor: '#003d9b',
+      }}>
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          secureTextEntry={!show}
+          autoCapitalize="none"
+          style={{
+            flex: 1, paddingHorizontal: 14, paddingVertical: 12,
+            fontSize: 14, color: '#191c1e',
+          }}
+        />
+        <TouchableOpacity onPress={onToggle} style={{ paddingHorizontal: 12 }}>
+          <MaterialIcons
+            name={show ? 'visibility' : 'visibility-off'}
+            size={20} color="#737685"
+          />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 
@@ -86,50 +151,164 @@ export default function AjustesScreen() {
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 20 }}>
-        {/* Empresa */}
-        <Text style={{
-          fontSize: 11, fontWeight: '700', color: '#003d9b',
-          textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12,
-        }}>
-          Mi Empresa
-        </Text>
-        <View style={{
-          backgroundColor: '#ffffff', borderRadius: 12,
-          padding: 16, marginBottom: 24,
-          shadowColor: '#191c1e', shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.05, shadowRadius: 6, elevation: 1,
-        }}>
-          <Field
-            label="Nombre de la empresa"
-            defaultValue={initialNombre}
-            onChangeText={(v: string) => { nombreRef.current = v; }}
-            placeholder="Constructora ABC S.A. de C.V."
+
+        {/* MI EMPRESA */}
+        <SectionTitle label="Mi Empresa" />
+        <Card>
+          <RefField
+            label="OBRA"
+            defaultValue={initialObra}
+            onChangeText={(v: string) => { obraRef.current = v; }}
+            placeholder="VISTAS DEL NEVADO"
           />
-          <Field
-            label="RFC"
-            defaultValue={initialRfc}
-            onChangeText={(v: string) => { rfcRef.current = v; }}
-            placeholder="XAXX010101000"
+          <RefField
+            label="FRENTE"
+            defaultValue={initialFrente}
+            onChangeText={(v: string) => { frenteRef.current = v; }}
+            placeholder="FRENTE 01"
           />
-        </View>
+        </Card>
+
+        {/* MI CUENTA */}
+        <SectionTitle label="Mi Cuenta" />
+        <Card>
+          {/* Email read-only */}
+          <View style={{ marginBottom: 16 }}>
+            <Text style={{
+              fontSize: 11, fontWeight: '700', color: '#434654',
+              textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6,
+            }}>
+              Cuenta Asociada
+            </Text>
+            <View style={{
+              backgroundColor: '#f0f1f3', borderRadius: 8,
+              paddingHorizontal: 14, paddingVertical: 12,
+            }}>
+              <Text style={{ fontSize: 14, color: '#737685' }}>
+                usuario@email.com
+              </Text>
+            </View>
+          </View>
+
+          {!editingPassword ? (
+            <TouchableOpacity
+              onPress={() => setEditingPassword(true)}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10 }}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="lock-outline" size={18} color="#003d9b" />
+              <Text style={{ fontSize: 14, color: '#003d9b', fontWeight: '600' }}>
+                Cambiar contrasena
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <>
+              <PasswordField
+                label="Contrasena actual"
+                value={currentPassword}
+                onChangeText={setCurrentPassword}
+                show={showCurrentPass}
+                onToggle={() => setShowCurrentPass(p => !p)}
+              />
+              <PasswordField
+                label="Nueva contrasena"
+                value={newPassword}
+                onChangeText={setNewPassword}
+                show={showNewPass}
+                onToggle={() => setShowNewPass(p => !p)}
+              />
+              <PasswordField
+                label="Confirmar nueva contrasena"
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                show={showConfirmPass}
+                onToggle={() => setShowConfirmPass(p => !p)}
+              />
+              <TouchableOpacity
+                onPress={() => {
+                  setEditingPassword(false);
+                  setCurrentPassword('');
+                  setNewPassword('');
+                  setConfirmPassword('');
+                }}
+                style={{ alignSelf: 'flex-end', paddingVertical: 4 }}
+                activeOpacity={0.7}
+              >
+                <Text style={{ fontSize: 13, color: '#737685' }}>Cancelar</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </Card>
+
+        {/* SUSCRIPCION */}
+        <SectionTitle label="Suscripcion" />
+        <Card>
+          <View style={{
+            flexDirection: 'row', alignItems: 'center',
+            justifyContent: 'space-between', marginBottom: 16,
+          }}>
+            <View>
+              <Text style={{
+                fontSize: 11, fontWeight: '700', color: '#434654',
+                textTransform: 'uppercase', letterSpacing: 1, marginBottom: 2,
+              }}>
+                Estado
+              </Text>
+              <Text style={{ fontSize: 14, color: '#004f11', fontWeight: '700' }}>Activa</Text>
+            </View>
+            <View style={{
+              backgroundColor: '#e7f7ea', borderRadius: 8,
+              paddingHorizontal: 10, paddingVertical: 4,
+            }}>
+              <Text style={{ fontSize: 11, color: '#004f11', fontWeight: '700' }}>PRO</Text>
+            </View>
+          </View>
+
+          <Text style={{ fontSize: 13, color: '#737685', marginBottom: 16 }}>
+            Valido hasta: 31/12/2026
+          </Text>
+
+          <TouchableOpacity
+            onPress={() =>
+              Alert.alert(
+                'Canjear codigo',
+                'Ingresa tu codigo de activacion:',
+                [
+                  { text: 'Cancelar', style: 'cancel' },
+                  { text: 'Canjear', onPress: () => {} },
+                ]
+              )
+            }
+            style={{
+              borderWidth: 1.5, borderColor: '#003d9b', borderRadius: 8,
+              paddingVertical: 10, alignItems: 'center',
+            }}
+            activeOpacity={0.8}
+          >
+            <Text style={{ fontSize: 13, fontWeight: '700', color: '#003d9b', textTransform: 'uppercase', letterSpacing: 1 }}>
+              Canjear Codigo
+            </Text>
+          </TouchableOpacity>
+        </Card>
 
         {/* Guardar */}
         <TouchableOpacity
           onPress={handleSave}
           style={{
-            marginTop: 8,
-            backgroundColor: saved ? '#004f11' : '#003d9b',
+            marginTop: 8, backgroundColor: '#003d9b',
             borderRadius: 12, paddingVertical: 14,
             alignItems: 'center', flexDirection: 'row',
             justifyContent: 'center', gap: 8,
           }}
           activeOpacity={0.85}
         >
-          <MaterialIcons name={saved ? 'check' : 'save'} size={18} color="#ffffff" />
+          <MaterialIcons name="save" size={18} color="#ffffff" />
           <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '700' }}>
-            {saved ? 'Guardado' : 'Guardar cambios'}
+            Guardar cambios
           </Text>
         </TouchableOpacity>
+
+        <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
   );
