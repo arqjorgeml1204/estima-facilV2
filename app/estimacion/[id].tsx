@@ -271,7 +271,55 @@ export default function EstimacionGrid() {
   //   "empty"           → disponible
   const handleCellTap = (concepto: Concepto, colIdx: number) => {
     if (isViewMode) return; // view mode: read-only
-    if (modoActualizacion) return; // en modo actualización el tap individual no aplica
+
+    // P1 #5: En Modo Actualización, toggle empty <-> estimated_prior por concepto
+    if (modoActualizacion) {
+      const det = detalles[concepto.id];
+      const persistedState = det?.cell_state ?? 'empty';
+      // Solo actuar sobre celdas empty o estimated_prior; current y estimated se ignoran
+      if (persistedState === 'current' || persistedState === 'estimated') return;
+
+      if (persistedState === 'empty') {
+        // Marcar como estimated_prior
+        setDetalles(prev => ({
+          ...prev,
+          [concepto.id]: {
+            ...(prev[concepto.id] ?? {
+              concepto_id: concepto.id,
+              cantidad_anterior: 0,
+              cantidad_esta_est: 0,
+              cantidad_acumulada: 0,
+              importe_esta_est: 0,
+              avance_financiero: 0,
+            }),
+            cell_state: 'estimated_prior',
+          },
+        }));
+        setUpdatePending(prev => ({ ...prev, [concepto.id]: true }));
+      } else if (persistedState === 'estimated_prior') {
+        // Desmarcar → empty
+        setDetalles(prev => ({
+          ...prev,
+          [concepto.id]: {
+            ...(prev[concepto.id] ?? {
+              concepto_id: concepto.id,
+              cantidad_anterior: 0,
+              cantidad_esta_est: 0,
+              cantidad_acumulada: 0,
+              importe_esta_est: 0,
+              avance_financiero: 0,
+            }),
+            cell_state: 'empty',
+          },
+        }));
+        setUpdatePending(prev => {
+          const next = { ...prev };
+          delete next[concepto.id];
+          return next;
+        });
+      }
+      return;
+    }
 
     const cantAnterior = detalles[concepto.id]?.cantidad_anterior ?? 0;
     const cantEsta = detalles[concepto.id]?.cantidad_esta_est ?? 0;
@@ -312,11 +360,57 @@ export default function EstimacionGrid() {
   };
 
   // ── 2d: Modo Actualización — Marcar Todo ─────────────────────────────────────
+  // P1 #3 & #4: Solo marcar celdas empty → estimated_prior, no tocar current ni estimated
   const handleMarcarTodo = (concepto: Concepto) => {
+    const det = detalles[concepto.id];
+    const state = det?.cell_state ?? 'empty';
+    // Solo marcar si está empty (no tocar current ni estimated)
+    if (state === 'current' || state === 'estimated') return;
+    setDetalles(prev => ({
+      ...prev,
+      [concepto.id]: {
+        ...(prev[concepto.id] ?? {
+          concepto_id: concepto.id,
+          cantidad_anterior: 0,
+          cantidad_esta_est: 0,
+          cantidad_acumulada: 0,
+          importe_esta_est: 0,
+          avance_financiero: 0,
+        }),
+        cell_state: 'estimated_prior',
+      },
+    }));
     setUpdatePending(prev => ({
       ...prev,
       [concepto.id]: true,
     }));
+  };
+
+  // P1 #4: Desmarcar Todo — revertir estimated_prior → empty
+  const handleDesmarcarTodo = (concepto: Concepto) => {
+    const det = detalles[concepto.id];
+    const state = det?.cell_state ?? 'empty';
+    // Solo desmarcar si está en estimated_prior
+    if (state !== 'estimated_prior') return;
+    setDetalles(prev => ({
+      ...prev,
+      [concepto.id]: {
+        ...(prev[concepto.id] ?? {
+          concepto_id: concepto.id,
+          cantidad_anterior: 0,
+          cantidad_esta_est: 0,
+          cantidad_acumulada: 0,
+          importe_esta_est: 0,
+          avance_financiero: 0,
+        }),
+        cell_state: 'empty',
+      },
+    }));
+    setUpdatePending(prev => {
+      const next = { ...prev };
+      delete next[concepto.id];
+      return next;
+    });
   };
 
   // ── 2d: Guardar Actualización ─────────────────────────────────────────────────
@@ -461,9 +555,12 @@ export default function EstimacionGrid() {
   };
 
   // ── Contador Update Mode ──────────────────────────────────────────────────────
+  // P1 #3: Solo contar celdas estimated_prior (nuevas en este modo), no current ni estimated
   const getUpdateCounter = (concepto: Concepto): string => {
     const total = concepto.factor;
-    const marked = updatePending[concepto.id] ? total : 0;
+    const det = detalles[concepto.id];
+    const state = det?.cell_state ?? 'empty';
+    const marked = state === 'estimated_prior' ? total : 0;
     return `${marked}/${total}`;
   };
 
@@ -750,18 +847,32 @@ export default function EstimacionGrid() {
                           {/* 2d: Modo Actualización — fila de controles */}
                           {modoActualizacion && (
                             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                              {/* Botón MARCAR TODO */}
-                              <TouchableOpacity
-                                onPress={() => handleMarcarTodo(concepto)}
-                                style={{
-                                  borderWidth: 1, borderColor: '#2196F3', borderRadius: 4,
-                                  paddingHorizontal: 6, paddingVertical: 2,
-                                }}
-                              >
-                                <Text style={{ fontSize: 8, fontWeight: '700', color: '#2196F3', textTransform: 'uppercase' }}>
-                                  Marcar todo
-                                </Text>
-                              </TouchableOpacity>
+                              <View style={{ flexDirection: 'row', gap: 4 }}>
+                                {/* Botón MARCAR TODO */}
+                                <TouchableOpacity
+                                  onPress={() => handleMarcarTodo(concepto)}
+                                  style={{
+                                    borderWidth: 1, borderColor: '#2196F3', borderRadius: 4,
+                                    paddingHorizontal: 6, paddingVertical: 2,
+                                  }}
+                                >
+                                  <Text style={{ fontSize: 8, fontWeight: '700', color: '#2196F3', textTransform: 'uppercase' }}>
+                                    Marcar
+                                  </Text>
+                                </TouchableOpacity>
+                                {/* P1 #4: Botón DESMARCAR TODO */}
+                                <TouchableOpacity
+                                  onPress={() => handleDesmarcarTodo(concepto)}
+                                  style={{
+                                    borderWidth: 1, borderColor: '#D32F2F', borderRadius: 4,
+                                    paddingHorizontal: 6, paddingVertical: 2,
+                                  }}
+                                >
+                                  <Text style={{ fontSize: 8, fontWeight: '700', color: '#D32F2F', textTransform: 'uppercase' }}>
+                                    Desmarcar
+                                  </Text>
+                                </TouchableOpacity>
+                              </View>
                               {/* Contador X/Y */}
                               <Text style={{ fontSize: 9, fontWeight: '700', color: '#2196F3' }}>
                                 {getUpdateCounter(concepto)}
