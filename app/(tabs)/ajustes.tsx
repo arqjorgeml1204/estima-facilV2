@@ -6,13 +6,17 @@
 
 import {
   View, Text, TextInput, TouchableOpacity,
-  SafeAreaView, ScrollView, Alert,
+  ScrollView, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState, useEffect, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter } from 'expo-router';
 
 export default function AjustesScreen() {
+  const router = useRouter();
+
   // useRef pattern — evita re-render que destruye el teclado
   const obraRef   = useRef<string>('VISTAS DEL NEVADO');
   const frenteRef = useRef<string>('FRENTE 01');
@@ -141,6 +145,10 @@ export default function AjustesScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
       <View style={{
         paddingHorizontal: 16, paddingVertical: 14,
         borderBottomWidth: 1, borderBottomColor: '#e1e2e4',
@@ -238,6 +246,21 @@ export default function AjustesScreen() {
               </TouchableOpacity>
             </>
           )}
+
+          {/* Separador */}
+          <View style={{ height: 1, backgroundColor: '#e1e2e4', marginTop: 12, marginBottom: 12 }} />
+
+          {/* Cerrar Sesión */}
+          <TouchableOpacity
+            onPress={() => router.replace('/(auth)/login')}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10 }}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="logout" size={18} color="#ba1a1a" />
+            <Text style={{ fontSize: 14, color: '#ba1a1a', fontWeight: '600' }}>
+              Cerrar Sesion
+            </Text>
+          </TouchableOpacity>
         </Card>
 
         {/* SUSCRIPCION */}
@@ -310,6 +333,7 @@ export default function AjustesScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
