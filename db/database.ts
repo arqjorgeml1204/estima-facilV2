@@ -27,6 +27,19 @@ export async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
       } catch {
         // columna ya existe — ignorar
       }
+      // Migraciones P0: columnas añadidas en sesión 9
+      try {
+        await database.execAsync(`ALTER TABLE estimacion ADD COLUMN week_number INTEGER DEFAULT 0`);
+      } catch (_) {}
+      try {
+        await database.execAsync(`ALTER TABLE estimacion ADD COLUMN cell_state TEXT DEFAULT 'empty'`);
+      } catch (_) {}
+      try {
+        await database.execAsync(`ALTER TABLE concepto ADD COLUMN paquete TEXT DEFAULT ''`);
+      } catch (_) {}
+      try {
+        await database.execAsync(`ALTER TABLE proyecto ADD COLUMN alias TEXT DEFAULT ''`);
+      } catch (_) {}
       db = database;
       return database;
     })();
@@ -337,6 +350,48 @@ export async function recalcularTotalesEstimacion(estimacionId: number) {
 export async function deleteEstimacion(estimacionId: number): Promise<void> {
   // ON DELETE CASCADE elimina detalle_estimacion, evidencia y croquis automáticamente
   await getDb().runAsync('DELETE FROM estimacion WHERE id=?', [estimacionId]);
+}
+
+// ─── Borrar Proyecto (cascada) ────────────────────────────────────────────────
+
+export async function deleteProyecto(proyectoId: number): Promise<void> {
+  const database = getDb();
+  // Borrar en orden: detalle_estimacion → estimacion → concepto → proyecto
+  // (evidencia y croquis se eliminan por CASCADE desde estimacion si está configurado,
+  // pero lo hacemos explícito para garantizar integridad)
+  const estimaciones = await database.getAllAsync<{ id: number }>(
+    'SELECT id FROM estimacion WHERE proyecto_id=?', [proyectoId]
+  );
+  for (const est of estimaciones) {
+    await database.runAsync('DELETE FROM detalle_estimacion WHERE estimacion_id=?', [est.id]);
+    await database.runAsync('DELETE FROM evidencia WHERE estimacion_id=?', [est.id]);
+    await database.runAsync('DELETE FROM croquis WHERE estimacion_id=?', [est.id]);
+  }
+  await database.runAsync('DELETE FROM estimacion WHERE proyecto_id=?', [proyectoId]);
+  await database.runAsync('DELETE FROM concepto WHERE proyecto_id=?', [proyectoId]);
+  await database.runAsync('DELETE FROM proyecto WHERE id=?', [proyectoId]);
+}
+
+// ─── Actualizar contadores del proyecto ───────────────────────────────────────
+
+export async function incrementarContadoresProyecto(
+  proyectoId: number,
+  nuevaEstimacionNumero: number,
+  nuevaSemana: number
+): Promise<void> {
+  await getDb().runAsync(
+    'UPDATE proyecto SET numero_estimacion_actual=?, semana_actual=? WHERE id=?',
+    [nuevaEstimacionNumero + 1, nuevaSemana + 1, proyectoId]
+  );
+}
+
+// ─── Última estimación de un proyecto ─────────────────────────────────────────
+
+export async function getUltimaEstimacionByProyecto(proyectoId: number) {
+  return getDb().getFirstAsync<any>(
+    'SELECT * FROM estimacion WHERE proyecto_id=? ORDER BY numero DESC LIMIT 1',
+    [proyectoId]
+  );
 }
 
 // ─── Cell State (para Modo Actualización) ────────────────────────────────────
