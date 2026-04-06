@@ -3,6 +3,8 @@
  * PANTALLA 1: Grid de Realización de Estimación.
  * Conceptos × Unidades (1…N). Tap = toggle, long press = input manual.
  * Fiel al diseño "Blueprint Precision" del Stitch original.
+ *
+ * Wave 2c: 2d (Borrar + Modo Actualización) + 2e (3 estados) + 2f (Est.#X editable)
  */
 
 import {
@@ -13,6 +15,7 @@ import {
 import { useLocalSearchParams, router } from 'expo-router';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   getEstimacionById,
   getProyectoById,
@@ -20,7 +23,16 @@ import {
   getDetallesByEstimacion,
   upsertDetalle,
   recalcularTotalesEstimacion,
+  deleteEstimacion,
+  updateCellStates,
+  guardarActualizacion,
+  updateEstimNumero,
 } from '../../db/database';
+import type { CellState } from '../../db/schema';
+
+// ─── AsyncStorage key ──────────────────────────────────────────────────────────
+
+const ASYNC_LAST_ESTIM_NUMBER = 'lastEstimNumber';
 
 // ─── ISO Week ──────────────────────────────────────────────────────────────────
 
@@ -55,10 +67,16 @@ interface Detalle {
   cantidad_acumulada: number;
   importe_esta_est: number;
   avance_financiero: number;
+  cell_state: CellState;
 }
 
 interface DetalleMap {
   [conceptoId: number]: Detalle;
+}
+
+// Mapa de cuántas unidades están en "update_pending" por concepto (UI-only)
+interface UpdatePendingMap {
+  [conceptoId: number]: boolean; // true = concepto completo marcado en modo actualización
 }
 
 // ─── Input Manual Modal ────────────────────────────────────────────────────────
@@ -149,6 +167,19 @@ export default function EstimacionGrid() {
   const [saving, setSaving]          = useState(false);
   const [totales, setTotales]        = useState({ subtotal: 0, retencion: 0, totalAPagar: 0 });
 
+  // 2f — Est. #X editable
+  const [estimNumber, setEstimNumber]       = useState<string>('1');
+  const [editingEstimNum, setEditingEstimNum] = useState(false);
+  const estimNumInputRef = useRef<TextInput>(null);
+
+  // 2d — Kebab menu
+  const [menuVisible, setMenuVisible] = useState(false);
+
+  // 2d — Modo Actualización
+  const [modoActualizacion, setModoActualizacion] = useState(false);
+  // updatePending: conceptoId → true si el concepto completo está marcado
+  const [updatePending, setUpdatePending] = useState<UpdatePendingMap>({});
+
   // Modal input manual
   const [modalVisible, setModalVisible] = useState(false);
   const [modalConcepto, setModalConcepto] = useState<Concepto | null>(null);
@@ -163,13 +194,17 @@ export default function EstimacionGrid() {
 
     const detMap: DetalleMap = {};
     for (const d of dets) {
-      detMap[d.concepto_id] = d;
+      detMap[d.concepto_id] = {
+        ...d,
+        cell_state: (d.cell_state as CellState) ?? 'empty',
+      };
     }
 
     setEstimacion(est);
     setProyecto(proy);
     setConceptos(concs);
     setDetalles(detMap);
+    setEstimNumber(String(est.numero ?? 1));
     setTotales({
       subtotal: est.subtotal || 0,
       retencion: est.retencion || 0,
@@ -179,6 +214,27 @@ export default function EstimacionGrid() {
   }, [estId]);
 
   useEffect(() => { load(); }, []);
+
+  // ── 2f: manejar edición de Est. #X ──────────────────────────────────────────
+  const handleEstimNumberBlur = async () => {
+    setEditingEstimNum(false);
+    const parsed = parseInt(estimNumber, 10);
+    if (isNaN(parsed) || parsed <= 0) {
+      // valor inválido — revertir al valor actual de la estimación
+      setEstimNumber(String(estimacion?.numero ?? 1));
+      return;
+    }
+    // Guardar en AsyncStorage y en SQLite
+    await AsyncStorage.setItem(ASYNC_LAST_ESTIM_NUMBER, String(parsed));
+    await updateEstimNumero(estId, parsed);
+    setEstimacion((prev: any) => prev ? { ...prev, numero: parsed } : prev);
+  };
+
+  const handleEstimNumberChange = (text: string) => {
+    // Solo permitir dígitos
+    const clean = text.replace(/[^0-9]/g, '');
+    setEstimNumber(clean);
+  };
 
   // ── Actualizar cantidad (tap o modal) ────────────────────────────────────────
   const updateCantidad = async (concepto: Concepto, nuevaCantidad: number) => {
@@ -196,6 +252,7 @@ export default function EstimacionGrid() {
         avance_financiero: concepto.factor > 0
           ? ((anterior + nuevaCantidad) / concepto.factor) * 100
           : 0,
+        cell_state: detalles[concepto.id]?.cell_state ?? 'empty',
       },
     }));
 
@@ -205,24 +262,33 @@ export default function EstimacionGrid() {
     setTotales(t);
   };
 
-  // Tap = toggle per-cell: each cell has state "estimated" | "current" | "empty"
-  // "estimated" = colIdx < cantAnterior  → blocked, do nothing
-  // "current"   = colIdx >= cantAnterior && colIdx < cantAnterior + cantEsta → unmark (–1)
-  // "empty"     = colIdx >= cantAnterior + cantEsta → mark (+1, up to max)
+  // ── 2e: handleCellTap con 4 estados ─────────────────────────────────────────
+  // Estados:
+  //   "estimated"       → celda formal previa — bloqueada, no tocar
+  //   "estimated_prior" → celda de Modo Actualización — bloqueada en modo normal
+  //   "current"         → seleccionada en esta sesión
+  //   "empty"           → disponible
   const handleCellTap = (concepto: Concepto, colIdx: number) => {
+    if (modoActualizacion) return; // en modo actualización el tap individual no aplica
+
     const cantAnterior = detalles[concepto.id]?.cantidad_anterior ?? 0;
     const cantEsta = detalles[concepto.id]?.cantidad_esta_est ?? 0;
+    const persistedState = detalles[concepto.id]?.cell_state ?? 'empty';
+
+    // Celdas "estimated" y "estimated_prior" están bloqueadas
+    if (persistedState === 'estimated' || persistedState === 'estimated_prior') {
+      // Si es de estimación anterior: bloqueado completamente
+      if (colIdx < cantAnterior) return;
+    }
+
     const isEstimated = colIdx < cantAnterior;
     const isCurrent = colIdx >= cantAnterior && colIdx < cantAnterior + cantEsta;
 
     if (isEstimated) {
-      // blocked — do nothing
-      return;
+      return; // bloqueado
     } else if (isCurrent) {
-      // unmark: remove this cell (–1)
       updateCantidad(concepto, cantEsta - 1);
     } else {
-      // empty: mark this cell (+1, only if it is the next sequential empty cell)
       const max = concepto.factor - cantAnterior;
       if (cantEsta < max) {
         updateCantidad(concepto, cantEsta + 1);
@@ -230,8 +296,9 @@ export default function EstimacionGrid() {
     }
   };
 
-  // Long press = input manual
+  // Long press = input manual (solo en modo normal)
   const handleLongPress = (concepto: Concepto) => {
+    if (modoActualizacion) return;
     setModalConcepto(concepto);
     setModalVisible(true);
   };
@@ -241,7 +308,80 @@ export default function EstimacionGrid() {
     setModalVisible(false);
   };
 
-  // ── Guardar ──────────────────────────────────────────────────────────────────
+  // ── 2d: Modo Actualización — Marcar Todo ─────────────────────────────────────
+  const handleMarcarTodo = (concepto: Concepto) => {
+    setUpdatePending(prev => ({
+      ...prev,
+      [concepto.id]: true,
+    }));
+  };
+
+  // ── 2d: Guardar Actualización ─────────────────────────────────────────────────
+  const handleGuardarActualizacion = async () => {
+    setSaving(true);
+    const pendingIds = Object.entries(updatePending)
+      .filter(([, marked]) => marked)
+      .map(([id]) => Number(id));
+
+    const costoMap: Record<number, number> = {};
+    for (const c of conceptos) {
+      costoMap[c.id] = c.costo_unitario;
+    }
+
+    await guardarActualizacion(estId, pendingIds, costoMap);
+
+    // Actualizar estado local: los pending → estimated_prior
+    setDetalles(prev => {
+      const next = { ...prev };
+      for (const cid of pendingIds) {
+        next[cid] = {
+          ...(next[cid] ?? {
+            concepto_id: cid,
+            cantidad_anterior: 0,
+            cantidad_esta_est: 0,
+            cantidad_acumulada: 0,
+            importe_esta_est: 0,
+            avance_financiero: 0,
+          }),
+          cell_state: 'estimated_prior',
+        };
+      }
+      return next;
+    });
+
+    setUpdatePending({});
+    setModoActualizacion(false);
+    setSaving(false);
+  };
+
+  // ── 2d: Borrar estimación ─────────────────────────────────────────────────────
+  const handleBorrarEstimacion = () => {
+    setMenuVisible(false);
+    Alert.alert(
+      '¿Estás seguro?',
+      '¿Deseas borrar esta estimación? Esta acción no se puede deshacer.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Borrar',
+          style: 'destructive',
+          onPress: async () => {
+            await deleteEstimacion(estId);
+            router.back();
+          },
+        },
+      ]
+    );
+  };
+
+  // ── 2d: Activar Modo Actualización ────────────────────────────────────────────
+  const handleActivarModoActualizacion = () => {
+    setMenuVisible(false);
+    setUpdatePending({});
+    setModoActualizacion(true);
+  };
+
+  // ── Guardar normal ───────────────────────────────────────────────────────────
   const handleGuardar = async () => {
     setSaving(true);
     await recalcularTotalesEstimacion(estId);
@@ -276,8 +416,69 @@ export default function EstimacionGrid() {
     paquetes[paquetes.length - 1].conceptos.push(c);
   }
 
+  // ── Helper: color de celda ────────────────────────────────────────────────────
+  // Estado de la celda (colIdx) para un concepto en modo normal:
+  //   estimated_prior → toda la fila es verde oscuro sin número (bloqueada)
+  //   estimated       → celdas < cantAnterior (verde oscuro + número)
+  //   current         → celdas en rango esta estimación (verde claro + semana)
+  //   empty           → resto (gris)
+  const getCellVisual = (
+    concepto: Concepto,
+    colIdx: number,
+  ): { bg: string; text: string | null; blocked: boolean } => {
+    const det = detalles[concepto.id];
+    const cantAnterior = det?.cantidad_anterior ?? 0;
+    const cantEsta = det?.cantidad_esta_est ?? 0;
+    const persistedState = det?.cell_state ?? 'empty';
+    const isPending = updatePending[concepto.id] === true;
+
+    // Modo Actualización: toda la fila marcada → azul
+    if (modoActualizacion && isPending) {
+      return { bg: '#2196F3', text: null, blocked: false };
+    }
+
+    // estimated_prior: toda la fila verde oscuro, sin número
+    if (persistedState === 'estimated_prior') {
+      return { bg: '#1A7A3C', text: null, blocked: true };
+    }
+
+    const isAnterior = colIdx < cantAnterior;
+    const isEsta = colIdx >= cantAnterior && colIdx < cantAnterior + cantEsta;
+
+    if (isAnterior) {
+      // estimated: verde oscuro + número de semana (colIdx+1 como placeholder)
+      return { bg: '#1A7A3C', text: String(colIdx + 1), blocked: true };
+    }
+    if (isEsta) {
+      // current: verde claro + semana actual
+      return { bg: '#4CAF50', text: String(currentWeek), blocked: false };
+    }
+    // empty
+    return { bg: '#E0E0E0', text: null, blocked: false };
+  };
+
+  // ── Contador Update Mode ──────────────────────────────────────────────────────
+  const getUpdateCounter = (concepto: Concepto): string => {
+    const total = concepto.factor;
+    const marked = updatePending[concepto.id] ? total : 0;
+    return `${marked}/${total}`;
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
+
+      {/* ── 2d: Banner Modo Actualización ── */}
+      {modoActualizacion && (
+        <View style={{
+          backgroundColor: '#0D47A1', paddingVertical: 10, paddingHorizontal: 16,
+          alignItems: 'center',
+        }}>
+          <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 13, letterSpacing: 1, textTransform: 'uppercase' }}>
+            MODO ACTUALIZACIÓN ACTIVO
+          </Text>
+        </View>
+      )}
+
       {/* ── TopAppBar ── */}
       <View style={{
         flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -319,10 +520,50 @@ export default function EstimacionGrid() {
             </Text>
           </View>
         </View>
-        <TouchableOpacity style={{ padding: 6, borderRadius: 99 }}>
+        {/* 2d: Kebab menu button */}
+        <TouchableOpacity
+          style={{ padding: 6, borderRadius: 99 }}
+          onPress={() => setMenuVisible(true)}
+        >
           <MaterialIcons name="more-vert" size={22} color="#003d9b" />
         </TouchableOpacity>
       </View>
+
+      {/* ── 2d: Kebab Menu Modal ── */}
+      <Modal
+        visible={menuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuVisible(false)}
+      >
+        <TouchableOpacity
+          style={{ flex: 1 }}
+          activeOpacity={1}
+          onPress={() => setMenuVisible(false)}
+        >
+          <View style={{
+            position: 'absolute', top: 60, right: 16,
+            backgroundColor: '#ffffff',
+            borderRadius: 8,
+            shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.15, shadowRadius: 10, elevation: 8,
+            minWidth: 220,
+          }}>
+            <TouchableOpacity
+              style={{ paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' }}
+              onPress={handleActivarModoActualizacion}
+            >
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#191c1e' }}>Modo Actualización</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{ paddingHorizontal: 16, paddingVertical: 14 }}
+              onPress={handleBorrarEstimacion}
+            >
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#D32F2F' }}>Borrar esta estimación</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* ── Summary Card ── */}
       <View style={{
@@ -378,9 +619,35 @@ export default function EstimacionGrid() {
               Semana actual: <Text style={{ color: '#003d9b' }}>{currentWeek}</Text>
             </Text>
           </View>
-          <Text style={{ fontSize: 10, color: '#737685' }}>
-            Est. #{estimacion?.numero}
-          </Text>
+          {/* 2f: Est. #X editable */}
+          <TouchableOpacity
+            onPress={() => {
+              setEditingEstimNum(true);
+              setTimeout(() => estimNumInputRef.current?.focus(), 50);
+            }}
+            activeOpacity={0.7}
+          >
+            {editingEstimNum ? (
+              <TextInput
+                ref={estimNumInputRef}
+                value={estimNumber}
+                onChangeText={handleEstimNumberChange}
+                onBlur={handleEstimNumberBlur}
+                keyboardType="number-pad"
+                selectTextOnFocus
+                style={{
+                  fontSize: 11, fontWeight: '700', color: '#003d9b',
+                  borderBottomWidth: 1, borderBottomColor: '#003d9b',
+                  minWidth: 40, textAlign: 'right', padding: 0,
+                }}
+              />
+            ) : (
+              <Text style={{ fontSize: 10, color: '#737685' }}>
+                Est. #{estimNumber}
+                <Text style={{ color: '#003d9b', fontSize: 9 }}> ✎</Text>
+              </Text>
+            )}
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -392,7 +659,7 @@ export default function EstimacionGrid() {
         shadowColor: '#191c1e', shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
       }}>
-        {/* Leyenda */}
+        {/* 2e: Leyenda actualizada */}
         <View style={{
           paddingHorizontal: 14, paddingVertical: 8,
           flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -400,14 +667,15 @@ export default function EstimacionGrid() {
           borderBottomWidth: 1, borderBottomColor: 'rgba(195,198,214,0.15)',
         }}>
           <Text style={{ fontSize: 12, fontWeight: '800', color: '#191c1e' }}>Conceptos</Text>
-          <View style={{ flexDirection: 'row', gap: 12 }}>
+          <View style={{ flexDirection: 'row', gap: 10 }}>
             {[
-              { color: '#004f11', label: 'Listo' },
-              { color: '#e1e2e4', label: 'Pend.' },
+              { color: '#1A7A3C', label: 'ESTIMADO' },
+              { color: '#4CAF50', label: 'ACTUAL' },
+              { color: '#E0E0E0', label: 'DISPONIBLE' },
             ].map(({ color, label }) => (
               <View key={label} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                 <View style={{ width: 8, height: 8, backgroundColor: color, borderRadius: 2 }} />
-                <Text style={{ fontSize: 10, fontWeight: '700', color: '#737685', textTransform: 'uppercase', letterSpacing: 1 }}>
+                <Text style={{ fontSize: 9, fontWeight: '700', color: '#737685', textTransform: 'uppercase', letterSpacing: 0.8 }}>
                   {label}
                 </Text>
               </View>
@@ -420,7 +688,6 @@ export default function EstimacionGrid() {
             <View>
               {/* Header de columnas */}
               <View style={{ flexDirection: 'row', backgroundColor: 'rgba(231,232,234,0.5)' }}>
-                {/* Columna fija concepto */}
                 <View style={{
                   width: COL_W, paddingVertical: 10, paddingHorizontal: 12,
                   borderRightWidth: 1, borderRightColor: 'rgba(195,198,214,0.1)',
@@ -429,7 +696,6 @@ export default function EstimacionGrid() {
                     Concepto
                   </Text>
                 </View>
-                {/* Columnas numéricas */}
                 {Array.from({ length: colCount }, (_, i) => (
                   <View key={i} style={{ width: CELL_W, paddingVertical: 10, alignItems: 'center' }}>
                     <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase' }}>
@@ -459,6 +725,7 @@ export default function EstimacionGrid() {
                     const cantEsta = det?.cantidad_esta_est ?? 0;
                     const cantAnterior = det?.cantidad_anterior ?? 0;
                     const isEvenRow = idx % 2 === 0;
+                    const isPending = updatePending[concepto.id] === true;
 
                     return (
                       <View
@@ -471,10 +738,31 @@ export default function EstimacionGrid() {
                       >
                         {/* Columna concepto (fija) */}
                         <View style={{
-                          width: COL_W, padding: 12,
+                          width: COL_W, padding: 10,
                           borderRightWidth: 1, borderRightColor: 'rgba(195,198,214,0.1)',
                           justifyContent: 'center',
                         }}>
+                          {/* 2d: Modo Actualización — fila de controles */}
+                          {modoActualizacion && (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                              {/* Botón MARCAR TODO */}
+                              <TouchableOpacity
+                                onPress={() => handleMarcarTodo(concepto)}
+                                style={{
+                                  borderWidth: 1, borderColor: '#2196F3', borderRadius: 4,
+                                  paddingHorizontal: 6, paddingVertical: 2,
+                                }}
+                              >
+                                <Text style={{ fontSize: 8, fontWeight: '700', color: '#2196F3', textTransform: 'uppercase' }}>
+                                  Marcar todo
+                                </Text>
+                              </TouchableOpacity>
+                              {/* Contador X/Y */}
+                              <Text style={{ fontSize: 9, fontWeight: '700', color: '#2196F3' }}>
+                                {getUpdateCounter(concepto)}
+                              </Text>
+                            </View>
+                          )}
                           <Text style={{ fontSize: 11, fontWeight: '700', color: '#191c1e', lineHeight: 15 }} numberOfLines={2}>
                             {concepto.descripcion}
                           </Text>
@@ -485,10 +773,7 @@ export default function EstimacionGrid() {
 
                         {/* Celdas interactivas */}
                         {Array.from({ length: colCount }, (_, colIdx) => {
-                          const acumTotal = cantAnterior + cantEsta;
-                          const isAnterior = colIdx < cantAnterior;   // estimaciones previas
-                          const isEsta = colIdx >= cantAnterior && colIdx < acumTotal; // esta estimación
-                          const isDone = isAnterior || isEsta;
+                          const { bg, text, blocked } = getCellVisual(concepto, colIdx);
 
                           return (
                             <TouchableOpacity
@@ -502,26 +787,19 @@ export default function EstimacionGrid() {
                               onPress={() => handleCellTap(concepto, colIdx)}
                               onLongPress={() => handleLongPress(concepto)}
                               delayLongPress={500}
-                              activeOpacity={0.7}
+                              activeOpacity={blocked ? 1 : 0.7}
                             >
                               <View style={{
                                 width: CELL_W - 8,
                                 aspectRatio: 1,
                                 borderRadius: 4,
-                                backgroundColor: isDone
-                                  ? (isEsta ? '#004f11' : '#166921')
-                                  : '#e1e2e4',
+                                backgroundColor: bg,
                                 alignItems: 'center',
                                 justifyContent: 'center',
                               }}>
-                                {isEsta && (
+                                {text !== null && (
                                   <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
-                                    {currentWeek}
-                                  </Text>
-                                )}
-                                {isAnterior && (
-                                  <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
-                                    {colIdx + 1}
+                                    {text}
                                   </Text>
                                 )}
                               </View>
@@ -559,95 +837,127 @@ export default function EstimacionGrid() {
         </ScrollView>
       </View>
 
-      {/* ── Botones Evidencia / Croquis ── */}
-      <View style={{
-        paddingHorizontal: 16, paddingVertical: 10,
-        flexDirection: 'row', gap: 10,
-        backgroundColor: 'rgba(248,249,251,0.8)',
-      }}>
-        {[
-          { icon: 'add-a-photo', label: 'Evidencia', route: `/evidencia/${estId}` },
-          { icon: 'map', label: 'Croquis', route: `/croquis/${estId}` },
-        ].map(({ icon, label, route }) => (
+      {/* ── Botones Evidencia / Croquis (modo normal) ── */}
+      {!modoActualizacion && (
+        <View style={{
+          paddingHorizontal: 16, paddingVertical: 10,
+          flexDirection: 'row', gap: 10,
+          backgroundColor: 'rgba(248,249,251,0.8)',
+        }}>
+          {[
+            { icon: 'add-a-photo', label: 'Evidencia', route: `/evidencia/${estId}` },
+            { icon: 'map', label: 'Croquis', route: `/croquis/${estId}` },
+          ].map(({ icon, label, route }) => (
+            <TouchableOpacity
+              key={label}
+              onPress={() => router.push(route as any)}
+              style={{
+                flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                gap: 6, paddingVertical: 9,
+                backgroundColor: '#ffffff', borderRadius: 6,
+                borderWidth: 1, borderColor: 'rgba(195,198,214,0.25)',
+                shadowColor: '#191c1e', shadowOffset: { width: 0, height: 1 },
+                shadowOpacity: 0.04, shadowRadius: 3, elevation: 1,
+              }}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons name={icon as any} size={16} color="#003d9b" />
+              <Text style={{ fontSize: 10, fontWeight: '700', color: '#003d9b', textTransform: 'uppercase', letterSpacing: 1 }}>
+                {label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      {/* ── Bottom Nav ── */}
+      {!modoActualizacion ? (
+        // Modo normal: Subtotal + Guardar + PDF
+        <View style={{
+          flexDirection: 'row', backgroundColor: '#ffffff',
+          paddingHorizontal: 16, paddingBottom: Platform.OS === 'ios' ? 28 : 16,
+          paddingTop: 12,
+          shadowColor: '#191c1e', shadowOffset: { width: 0, height: -6 },
+          shadowOpacity: 0.06, shadowRadius: 16, elevation: 8,
+          borderTopLeftRadius: 16, borderTopRightRadius: 16,
+        }}>
+          {/* Subtotal */}
+          <View style={{
+            flex: 1.5, flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            backgroundColor: '#003d9b', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10,
+            marginRight: 8,
+          }}>
+            <MaterialIcons name="calculate" size={16} color="#ffffff" />
+            <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, marginTop: 2 }}>
+              Subtotal
+            </Text>
+            <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: 11, fontWeight: '700' }}>
+              ${(totales.subtotal / 1000).toFixed(1)}k
+            </Text>
+          </View>
+
+          {/* Guardar */}
           <TouchableOpacity
-            key={label}
-            onPress={() => router.push(route as any)}
+            onPress={handleGuardar}
+            disabled={saving}
             style={{
-              flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-              gap: 6, paddingVertical: 9,
-              backgroundColor: '#ffffff', borderRadius: 6,
-              borderWidth: 1, borderColor: 'rgba(195,198,214,0.25)',
-              shadowColor: '#191c1e', shadowOffset: { width: 0, height: 1 },
-              shadowOpacity: 0.04, shadowRadius: 3, elevation: 1,
+              flex: 1, alignItems: 'center', justifyContent: 'center',
+              paddingVertical: 8,
+            }}
+            activeOpacity={0.7}
+          >
+            {saving
+              ? <ActivityIndicator size="small" color="#003d9b" />
+              : <MaterialIcons name="save" size={20} color="#191c1e" />
+            }
+            <Text style={{ fontSize: 9, fontWeight: '700', color: '#191c1e', textTransform: 'uppercase', letterSpacing: 1, marginTop: 2 }}>
+              Guardar
+            </Text>
+          </TouchableOpacity>
+
+          {/* PDF */}
+          <TouchableOpacity
+            onPress={() => router.push(`/pdf/soporte/${estId}` as any)}
+            style={{
+              flex: 1, alignItems: 'center', justifyContent: 'center',
+              paddingVertical: 8,
+            }}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="picture-as-pdf" size={20} color="#191c1e" />
+            <Text style={{ fontSize: 9, fontWeight: '700', color: '#191c1e', textTransform: 'uppercase', letterSpacing: 1, marginTop: 2 }}>
+              PDF
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        // 2d: Modo Actualización — botón único "Guardar Actualización"
+        <View style={{
+          backgroundColor: '#ffffff',
+          paddingHorizontal: 16, paddingBottom: Platform.OS === 'ios' ? 28 : 16,
+          paddingTop: 12,
+          shadowColor: '#191c1e', shadowOffset: { width: 0, height: -6 },
+          shadowOpacity: 0.06, shadowRadius: 16, elevation: 8,
+          borderTopLeftRadius: 16, borderTopRightRadius: 16,
+        }}>
+          <TouchableOpacity
+            onPress={handleGuardarActualizacion}
+            disabled={saving}
+            style={{
+              backgroundColor: '#2196F3', borderRadius: 10,
+              paddingVertical: 14, alignItems: 'center', justifyContent: 'center',
             }}
             activeOpacity={0.85}
           >
-            <MaterialIcons name={icon as any} size={16} color="#003d9b" />
-            <Text style={{ fontSize: 10, fontWeight: '700', color: '#003d9b', textTransform: 'uppercase', letterSpacing: 1 }}>
-              {label}
-            </Text>
+            {saving
+              ? <ActivityIndicator size="small" color="#ffffff" />
+              : <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 15, textTransform: 'uppercase', letterSpacing: 1 }}>
+                  Guardar Actualización
+                </Text>
+            }
           </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* ── Bottom Nav ── */}
-      <View style={{
-        flexDirection: 'row', backgroundColor: '#ffffff',
-        paddingHorizontal: 16, paddingBottom: Platform.OS === 'ios' ? 28 : 16,
-        paddingTop: 12,
-        shadowColor: '#191c1e', shadowOffset: { width: 0, height: -6 },
-        shadowOpacity: 0.06, shadowRadius: 16, elevation: 8,
-        borderTopLeftRadius: 16, borderTopRightRadius: 16,
-      }}>
-        {/* Subtotal */}
-        <View style={{
-          flex: 1.5, flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          backgroundColor: '#003d9b', borderRadius: 8, paddingVertical: 8, paddingHorizontal: 10,
-          marginRight: 8,
-        }}>
-          <MaterialIcons name="calculate" size={16} color="#ffffff" />
-          <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, marginTop: 2 }}>
-            Subtotal
-          </Text>
-          <Text style={{ color: 'rgba(255,255,255,0.9)', fontSize: 11, fontWeight: '700' }}>
-            ${(totales.subtotal / 1000).toFixed(1)}k
-          </Text>
         </View>
-
-        {/* Guardar */}
-        <TouchableOpacity
-          onPress={handleGuardar}
-          disabled={saving}
-          style={{
-            flex: 1, alignItems: 'center', justifyContent: 'center',
-            paddingVertical: 8,
-          }}
-          activeOpacity={0.7}
-        >
-          {saving
-            ? <ActivityIndicator size="small" color="#003d9b" />
-            : <MaterialIcons name="save" size={20} color="#191c1e" />
-          }
-          <Text style={{ fontSize: 9, fontWeight: '700', color: '#191c1e', textTransform: 'uppercase', letterSpacing: 1, marginTop: 2 }}>
-            Guardar
-          </Text>
-        </TouchableOpacity>
-
-        {/* PDF */}
-        <TouchableOpacity
-          onPress={() => router.push(`/pdf/soporte/${estId}` as any)}
-          style={{
-            flex: 1, alignItems: 'center', justifyContent: 'center',
-            paddingVertical: 8,
-          }}
-          activeOpacity={0.7}
-        >
-          <MaterialIcons name="picture-as-pdf" size={20} color="#191c1e" />
-          <Text style={{ fontSize: 9, fontWeight: '700', color: '#191c1e', textTransform: 'uppercase', letterSpacing: 1, marginTop: 2 }}>
-            PDF
-          </Text>
-        </TouchableOpacity>
-      </View>
+      )}
 
       {/* ── Input Manual Modal ── */}
       <InputModal

@@ -86,7 +86,23 @@ export interface DetalleEstimacion {
   importeEstaEst: number;
   importeAcumulado: number;
   avanceFinanciero: number; // porcentaje 0-100
+  cellState: CellState;     // estado visual de la celda
 }
+
+// ─── Estado de celda ──────────────────────────────────────────────────────────
+
+export type CellState =
+  | 'empty'            // disponible, sin estimar
+  | 'current'          // seleccionada en esta estimación (verde claro)
+  | 'estimated'        // estimada en sesión formal previa (verde oscuro + número)
+  | 'estimated_prior'; // marcada via Modo Actualización (verde oscuro, sin número)
+
+// ─── Migración adicional (columnas nuevas en tablas existentes) ───────────────
+
+export const MIGRATIONS_ALTER = `
+  -- Agrega cell_state a detalle_estimacion si no existe (SQLite 3.37+)
+  -- Se ejecuta en initDatabase con try/catch para compatibilidad
+`;
 
 export interface Evidencia {
   id: number;
@@ -187,7 +203,8 @@ export const MIGRATIONS = `
     importe_anterior     REAL    DEFAULT 0,
     importe_esta_est     REAL    DEFAULT 0,
     importe_acumulado    REAL    DEFAULT 0,
-    avance_financiero    REAL    DEFAULT 0
+    avance_financiero    REAL    DEFAULT 0,
+    cell_state           TEXT    DEFAULT 'empty'
   );
 
   CREATE TABLE IF NOT EXISTS evidencia (

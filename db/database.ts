@@ -5,6 +5,7 @@
 
 import * as SQLite from 'expo-sqlite';
 import { MIGRATIONS, DB_NAME } from './schema';
+import type { CellState } from './schema';
 import type { ContratoExtraido } from '../services/pdfExtractor';
 
 let db: SQLite.SQLiteDatabase | null = null;
@@ -18,6 +19,14 @@ export async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
     initPromise = (async () => {
       const database = await SQLite.openDatabaseAsync(DB_NAME);
       await database.execAsync(MIGRATIONS);
+      // Migración incremental: agrega cell_state si no existe (DBs previas)
+      try {
+        await database.execAsync(
+          `ALTER TABLE detalle_estimacion ADD COLUMN cell_state TEXT DEFAULT 'empty';`
+        );
+      } catch {
+        // columna ya existe — ignorar
+      }
       db = database;
       return database;
     })();
@@ -321,4 +330,89 @@ export async function recalcularTotalesEstimacion(estimacionId: number) {
     [subtotal, retencion, totalAPagar, estimacionId]
   );
   return { subtotal, retencion, totalAPagar };
+}
+
+// ─── Borrar Estimación ────────────────────────────────────────────────────────
+
+export async function deleteEstimacion(estimacionId: number): Promise<void> {
+  // ON DELETE CASCADE elimina detalle_estimacion, evidencia y croquis automáticamente
+  await getDb().runAsync('DELETE FROM estimacion WHERE id=?', [estimacionId]);
+}
+
+// ─── Cell State (para Modo Actualización) ────────────────────────────────────
+
+/**
+ * Actualiza cell_state en detalle_estimacion para un concepto dado.
+ * Crea el registro si no existe (con cantidad_esta_est = 0).
+ */
+export async function updateCellStates(
+  estimacionId: number,
+  conceptoId: number,
+  newState: CellState,
+  costoUnitario: number
+): Promise<void> {
+  const database = getDb();
+  const existing = await database.getFirstAsync<{ id: number }>(
+    'SELECT id FROM detalle_estimacion WHERE estimacion_id=? AND concepto_id=?',
+    [estimacionId, conceptoId]
+  );
+  if (existing) {
+    await database.runAsync(
+      'UPDATE detalle_estimacion SET cell_state=? WHERE id=?',
+      [newState, existing.id]
+    );
+  } else {
+    await database.runAsync(
+      `INSERT INTO detalle_estimacion
+         (estimacion_id, concepto_id, cantidad_anterior, cantidad_esta_est,
+          cantidad_acumulada, importe_anterior, importe_esta_est,
+          importe_acumulado, avance_financiero, cell_state)
+       VALUES (?,?,0,0,0,0,0,0,0,?)`,
+      [estimacionId, conceptoId, newState]
+    );
+  }
+}
+
+/**
+ * Obtiene el cell_state persistido para un concepto en una estimación.
+ */
+export async function getCellStateForConcepto(
+  estimacionId: number,
+  conceptoId: number
+): Promise<CellState> {
+  const row = await getDb().getFirstAsync<{ cell_state: string }>(
+    'SELECT cell_state FROM detalle_estimacion WHERE estimacion_id=? AND concepto_id=?',
+    [estimacionId, conceptoId]
+  );
+  return (row?.cell_state as CellState) ?? 'empty';
+}
+
+/**
+ * Actualiza el número de estimación (estim_number) en la tabla estimacion.
+ */
+export async function updateEstimNumero(estimacionId: number, numero: number): Promise<void> {
+  await getDb().runAsync(
+    'UPDATE estimacion SET numero=? WHERE id=?',
+    [numero, estimacionId]
+  );
+}
+
+/**
+ * Persiste estado "estimated_prior" para todos los conceptos cuyo estado sea
+ * "update_pending" en el mapa local pasado como argumento.
+ * Retorna la lista de conceptoIds actualizados.
+ */
+export async function guardarActualizacion(
+  estimacionId: number,
+  updatePendingIds: number[],
+  costoUnitarioMap: Record<number, number>
+): Promise<void> {
+  for (const conceptoId of updatePendingIds) {
+    await updateCellStates(
+      estimacionId,
+      conceptoId,
+      'estimated_prior',
+      costoUnitarioMap[conceptoId] ?? 0
+    );
+  }
 }
