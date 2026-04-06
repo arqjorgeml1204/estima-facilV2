@@ -16,6 +16,8 @@ import {
   getEstimacionesByProyecto,
   crearEstimacion,
   deleteEstimacion,
+  deleteProyecto,
+  incrementarContadoresProyecto,
 } from '../../db/database';
 
 interface Proyecto {
@@ -32,6 +34,7 @@ interface Proyecto {
   semana_actual: number;
   numero_estimacion_actual: number;
   frente: string;
+  alias: string;
 }
 
 interface Estimacion {
@@ -80,6 +83,9 @@ export default function ProyectoDashboard() {
     const estId = await crearEstimacion(
       proyecto.id, numero, semana, fmt(lunes), fmt(domingo)
     );
+    // Actualizar contadores del proyecto para que semana_actual y
+    // numero_estimacion_actual reflejen la estimacion recién creada
+    await incrementarContadoresProyecto(proyecto.id, numero, semana);
     router.push(`/estimacion/${estId}` as any);
   };
 
@@ -110,6 +116,24 @@ export default function ProyectoDashboard() {
 
   const handleOpenEstimacion = (estId: number) => {
     router.push(`/estimacion/${estId}` as any);
+  };
+
+  const handleEliminarContrato = () => {
+    if (!proyecto) return;
+    Alert.alert(
+      '¿Eliminar este contrato?',
+      'Esta acción no se puede deshacer.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar', style: 'destructive',
+          onPress: async () => {
+            await deleteProyecto(proyecto.id);
+            router.replace('/' as any);
+          },
+        },
+      ]
+    );
   };
 
   if (loading) {
@@ -150,9 +174,14 @@ export default function ProyectoDashboard() {
             {proyecto.codigo}
           </Text>
           <Text style={{ fontSize: 10, color: '#737685', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-            {proyecto.numero_contrato}
+            {proyecto.alias
+              ? `${proyecto.alias} — Contrato #${proyecto.numero_contrato}`
+              : `Contrato #${proyecto.numero_contrato}`}
           </Text>
         </View>
+        <TouchableOpacity onPress={handleEliminarContrato} activeOpacity={0.7}>
+          <MaterialIcons name="delete" size={22} color="#D32F2F" />
+        </TouchableOpacity>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
