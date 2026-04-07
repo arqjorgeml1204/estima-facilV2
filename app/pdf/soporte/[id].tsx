@@ -6,14 +6,15 @@
 
 import {
   View, Text, TouchableOpacity, ScrollView,
-  ActivityIndicator, SafeAreaView, Platform, Alert, Share, TextInput,
+  ActivityIndicator, SafeAreaView, Platform, Alert, TextInput,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system/legacy';
 import {
   initDatabase, getEstimacionById, getProyectoById,
   getDetallesByEstimacion, getEmpresa,
@@ -125,6 +126,9 @@ export default function PdfSoporte() {
   const [editingActividad, setEditingActividad] = useState<string | null>(null);
   const [obraAsync, setObraAsync] = useState<string>('VISTAS DEL NEVADO');
   const [frenteAsync, setFrenteAsync] = useState<string>('FRENTE 01');
+  const [retencion, setRetencion] = useState<number>(5);
+  const [retencionText, setRetencionText] = useState<string>('5');
+  const [evidenciasBase64, setEvidenciasBase64] = useState<Record<string, string>>({});
 
   useEffect(() => {
     (async () => {
@@ -160,6 +164,26 @@ export default function PdfSoporte() {
     })();
   }, [id]);
 
+  // ── Cargar fotos como base64 cuando evidencias cambian ──────────────────────
+  useEffect(() => {
+    if (evidencias.length === 0) return;
+    (async () => {
+      const map: Record<string, string> = {};
+      for (const ev of evidencias) {
+        try {
+          const info = await FileSystem.getInfoAsync(ev.imagen_uri);
+          if (info.exists) {
+            const b64 = await FileSystem.readAsStringAsync(ev.imagen_uri, { encoding: 'base64' });
+            map[ev.id] = b64;
+          }
+        } catch (e) {
+          console.warn('[PdfSoporte] No se pudo leer imagen evidencia:', ev.id, e);
+        }
+      }
+      setEvidenciasBase64(map);
+    })();
+  }, [evidencias]);
+
   // ── Lookup map: actividad → concepto (for paquete/subpaquete) ───────────────
   const conceptoMap: Record<string, any> = {};
   for (const c of conceptos) {
@@ -191,11 +215,13 @@ export default function PdfSoporte() {
     return Object.values(map);
   })();
 
-  // Aplicar overrides manuales y calcular derivados
+  // Aplicar overrides manuales y calcular derivados (#16: cap estaEst a factor)
   const computedRows: ComputedRow[] = groupedRows.map(g => {
-    const estaEst = editedEstaEst[g.actividad] !== undefined
+    const rawEstaEst = editedEstaEst[g.actividad] !== undefined
       ? parseFloat(editedEstaEst[g.actividad]) || 0
       : g.estaEstBase;
+    const maxAllowed = Math.max(0, g.factor - g.ant);
+    const estaEst = Math.min(rawEstaEst, maxAllowed);
     const acum = g.ant + estaEst;
     const importeContrato = g.costo_unitario * g.factor;
     const importeAnt = g.ant * g.costo_unitario;
@@ -207,9 +233,10 @@ export default function PdfSoporte() {
     return { ...g, estaEst, acum, importeContrato, importeAnt, importeEstaEst, importeAcum, avance };
   });
 
-  // Totales locales recalculados en tiempo real
+  // Totales locales recalculados en tiempo real (#15: retención editable)
   const localSubtotal = computedRows.reduce((s, r) => s + r.importeEstaEst, 0);
-  const localRetencion = localSubtotal * 0.05;
+  const retencionPct = Math.max(0, Math.min(100, retencion)) / 100;
+  const localRetencion = localSubtotal * retencionPct;
   const localTotal = localSubtotal - localRetencion;
 
   // Header-level totals
@@ -239,7 +266,8 @@ export default function PdfSoporte() {
     const conjunto = proyecto?.conjunto ?? proyecto?.codigo ?? '';
     const contrato = proyecto?.numero_contrato ?? '';
     const frente = frenteAsync;
-    const desarrollo = obraAsync;
+    const desarrolloRaw = obraAsync;
+    const desarrollo = desarrolloRaw.length > 60 ? desarrolloRaw.slice(0, 60) + '...' : desarrolloRaw;
 
     // ── buildHeader: reutilizable para soporte, evidencia, croquis ──────────
     const buildHeader = (sectionTitle: string) => `
@@ -352,21 +380,28 @@ export default function PdfSoporte() {
     const totalAcumImp = computedRows.reduce((s, r) => s + r.importeAcum, 0);
     const totalAvance = totalImporteContrato > 0 ? (totalAcumImp / totalImporteContrato) * 100 : 0;
 
-    // ── Hoja 2: Evidencia fotográfica (condicional) ─────────────────────────
+    // ── Hoja 2: Evidencia fotográfica (condicional) — #6 fotos base64, #24 grid adaptativo
     let evidenciaPages = '';
     if (evidencias.length > 0) {
+      // Grid adaptativo: <=3 → 1col, <=6 → 2col, <=9 → 3col
+      const gridCols = evidencias.length <= 3 ? 1 : evidencias.length <= 6 ? 2 : 3;
+      const perPage = gridCols * 3; // 3 rows per page
       const chunks: any[][] = [];
-      for (let i = 0; i < evidencias.length; i += 4) chunks.push(evidencias.slice(i, i + 4));
+      for (let i = 0; i < evidencias.length; i += perPage) chunks.push(evidencias.slice(i, i + perPage));
       evidenciaPages = chunks.map((chunk, pi) => `
         <div class="page-break">
           ${buildHeader('EVIDENCIA FOTOGRÁFICA')}
           <div class="section-title">EVIDENCIA FOTOGRÁFICA</div>
-          <div class="foto-grid">
-            ${chunk.map((f: any, fi: number) => `
+          <div style="display:grid;grid-template-columns:repeat(${gridCols},1fr);gap:10px;">
+            ${chunk.map((f: any, fi: number) => {
+              const b64 = evidenciasBase64[f.id];
+              const imgSrc = b64 ? `data:image/jpeg;base64,${b64}` : f.imagen_uri;
+              return `
               <div class="foto-cell">
-                <img src="${f.imagen_uri}" class="foto-img"/>
-                <div class="media-label">${pi * 4 + fi + 1}. ${f.descripcion || f.actividad || ''}</div>
-              </div>`).join('')}
+                <img src="${imgSrc}" class="foto-img"/>
+                <div class="media-label">${pi * perPage + fi + 1}. ${f.descripcion || f.actividad || ''}</div>
+              </div>`;
+            }).join('')}
           </div>
         </div>`).join('');
     }
@@ -396,14 +431,14 @@ export default function PdfSoporte() {
 <head>
 <meta charset="UTF-8"/>
 <style>
-  @page { size: letter landscape; margin: 8mm; }
+  @page { size: letter landscape; margin: 5mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, Helvetica, sans-serif; font-size: 7px; color: #000; padding: 0; }
 
   /* ── Header table ─────────────────────────────────────── */
   .hdr { width: 100%; border-collapse: collapse; margin-bottom: 0; }
   .hdr td { border: 1px solid #000; padding: 2px 4px; font-size: 8px; }
-  .logo-cell { width: 5%; text-align: center; vertical-align: middle; background: #fff; font-size: 7px; color: #999; }
+  .logo-cell { width: 8%; min-width: 80px; min-height: 80px; text-align: center; vertical-align: middle; background: #fff; font-size: 7px; color: #999; }
   .hdr-title { background: #1F4E79; color: #fff; font-weight: 700; font-size: 9px; text-align: center; vertical-align: middle; }
   .hdr-val { background: #FFFFCC; font-weight: 700; font-size: 9px; text-align: center; vertical-align: middle; }
 
@@ -422,11 +457,11 @@ export default function PdfSoporte() {
 
   /* ── Data table ───────────────────────────────────────── */
   .data { width: 100%; border-collapse: collapse; table-layout: fixed; }
-  .data th, .data td { border: 1px solid #000; padding: 1px 2px; overflow: hidden; text-overflow: ellipsis; }
-  .data th { font-size: 6px; font-weight: 700; text-align: center; vertical-align: middle; white-space: normal; word-wrap: break-word; }
+  .data th, .data td { border: 1px solid #000; padding: 0px 1px; overflow: hidden; text-overflow: ellipsis; line-height: 1.1; }
+  .data th { font-size: 5.5px; font-weight: 700; text-align: center; vertical-align: middle; white-space: normal; word-wrap: break-word; }
   .th1 { background: #1F4E79; color: #fff; }
   .th2 { background: #2E75B6; color: #fff; }
-  .data td { font-size: 6.5px; vertical-align: top; }
+  .data td { font-size: 6px; vertical-align: top; }
   .grp-hdr td { background: #D6E4F0; font-weight: 700; font-size: 7px; padding: 3px 4px; }
   .act { font-weight: 700; color: #1F4E79; white-space: nowrap; }
   .txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -528,7 +563,7 @@ ${descripcionHtml}
   </tr>
   <tr class="footer-row">
     <td style="border:none;"></td>
-    <td class="footer-label">RETENCIÓN (F.G.) 5%</td>
+    <td class="footer-label">RETENCIÓN (F.G.) ${retencion}%</td>
     <td class="footer-val" style="color:#c0392b">-$ ${fmt(localRetencion)}</td>
   </tr>
   <tr class="footer-row footer-total">
@@ -560,7 +595,16 @@ ${croquesPages}
         width: PAGE_WIDTH,
         height: PAGE_HEIGHT,
       });
-      await Share.share({ url: uri, title: 'Estimación PDF' });
+      // #7: Usar expo-sharing para compartir el archivo PDF directamente
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (!isAvailable) {
+        Alert.alert('Error', 'Compartir no disponible en este dispositivo.');
+        return;
+      }
+      await Sharing.shareAsync(uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Compartir PDF Estimación',
+      });
     } catch (e) {
       Alert.alert('Error', 'No se pudo generar el PDF.');
     } finally {
