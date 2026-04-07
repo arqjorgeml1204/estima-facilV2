@@ -13,7 +13,7 @@ import {
   Platform,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo, memo } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -269,7 +269,7 @@ export default function EstimacionGrid() {
   //   "estimated_prior" → celda de Modo Actualización — bloqueada en modo normal
   //   "current"         → seleccionada en esta sesión
   //   "empty"           → disponible
-  const handleCellTap = (concepto: Concepto, colIdx: number) => {
+  const handleCellTap = useCallback((concepto: Concepto, colIdx: number) => {
     if (isViewMode) return; // view mode: read-only
 
     // P1 #5: En Modo Actualización, toggle empty <-> estimated_prior por concepto
@@ -344,24 +344,24 @@ export default function EstimacionGrid() {
         updateCantidad(concepto, cantEsta + 1);
       }
     }
-  };
+  }, [isViewMode, modoActualizacion, detalles, updateCantidad, setDetalles, setUpdatePending]);
 
   // Long press = input manual (solo en modo normal)
-  const handleLongPress = (concepto: Concepto) => {
+  const handleLongPress = useCallback((concepto: Concepto) => {
     if (isViewMode) return;
     if (modoActualizacion) return;
     setModalConcepto(concepto);
     setModalVisible(true);
-  };
+  }, [isViewMode, modoActualizacion]);
 
-  const handleModalConfirm = (val: number) => {
+  const handleModalConfirm = useCallback((val: number) => {
     if (modalConcepto) updateCantidad(modalConcepto, val);
     setModalVisible(false);
-  };
+  }, [modalConcepto, updateCantidad]);
 
   // ── 2d: Modo Actualización — Marcar Todo ─────────────────────────────────────
   // P1 #3 & #4: Solo marcar celdas empty → estimated_prior, no tocar current ni estimated
-  const handleMarcarTodo = (concepto: Concepto) => {
+  const handleMarcarTodo = useCallback((concepto: Concepto) => {
     const det = detalles[concepto.id];
     const state = det?.cell_state ?? 'empty';
     // Solo marcar si está empty (no tocar current ni estimated)
@@ -384,10 +384,10 @@ export default function EstimacionGrid() {
       ...prev,
       [concepto.id]: true,
     }));
-  };
+  }, [detalles]);
 
   // P1 #4: Desmarcar Todo — revertir estimated_prior → empty
-  const handleDesmarcarTodo = (concepto: Concepto) => {
+  const handleDesmarcarTodo = useCallback((concepto: Concepto) => {
     const det = detalles[concepto.id];
     const state = det?.cell_state ?? 'empty';
     // Solo desmarcar si está en estimated_prior
@@ -411,10 +411,10 @@ export default function EstimacionGrid() {
       delete next[concepto.id];
       return next;
     });
-  };
+  }, [detalles]);
 
   // ── 2d: Guardar Actualización ─────────────────────────────────────────────────
-  const handleGuardarActualizacion = async () => {
+  const handleGuardarActualizacion = useCallback(async () => {
     setSaving(true);
     const pendingIds = Object.entries(updatePending)
       .filter(([, marked]) => marked)
@@ -449,10 +449,10 @@ export default function EstimacionGrid() {
     setUpdatePending({});
     setModoActualizacion(false);
     setSaving(false);
-  };
+  }, [updatePending, conceptos, estId]);
 
   // ── 2d: Borrar estimación ─────────────────────────────────────────────────────
-  const handleBorrarEstimacion = () => {
+  const handleBorrarEstimacion = useCallback(() => {
     setMenuVisible(false);
     Alert.alert(
       '¿Estás seguro?',
@@ -469,22 +469,22 @@ export default function EstimacionGrid() {
         },
       ]
     );
-  };
+  }, [estId]);
 
   // ── 2d: Activar Modo Actualización ────────────────────────────────────────────
-  const handleActivarModoActualizacion = () => {
+  const handleActivarModoActualizacion = useCallback(() => {
     setMenuVisible(false);
     setUpdatePending({});
     setModoActualizacion(true);
-  };
+  }, []);
 
   // ── Guardar normal ───────────────────────────────────────────────────────────
-  const handleGuardar = async () => {
+  const handleGuardar = useCallback(async () => {
     setSaving(true);
     await recalcularTotalesEstimacion(estId);
     setSaving(false);
     Alert.alert('Guardado', 'La estimación fue guardada correctamente.');
-  };
+  }, [estId]);
 
   // ── Loading ──────────────────────────────────────────────────────────────────
   if (loading) {
