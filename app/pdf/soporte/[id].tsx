@@ -612,6 +612,18 @@ ${croquesPages}
     }
   };
 
+  const handleStartEdit = useCallback((actividad: string, estaEstBase: number) => {
+    setEditedEstaEst(prev => {
+      if (prev[actividad] !== undefined) return prev;
+      return { ...prev, [actividad]: String(estaEstBase) };
+    });
+    setEditingActividad(actividad);
+  }, []);
+
+  const handleStopEdit = useCallback(() => {
+    setEditingActividad(null);
+  }, []);
+
   const handlePrint = async () => {
     setExporting(true);
     try {
@@ -782,18 +794,13 @@ ${croquesPages}
 
                   {/* ESTA EST. — editable inline */}
                   <View style={{ flex: 1, backgroundColor: '#e8f5e9', borderRadius: 6, padding: 6 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <Text style={{ fontSize: 8, color: '#737685', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3 }}>ESTA EST.</Text>
-                      {editingActividad !== row.actividad && (
-                        <MaterialIcons name="edit" size={10} color="#004f11" />
-                      )}
-                    </View>
+                    <Text style={{ fontSize: 8, color: '#737685', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3 }}>ESTA EST.</Text>
                     {editingActividad === row.actividad ? (
                       <TextInput
                         value={editedEstaEst[row.actividad] ?? String(row.estaEstBase)}
                         onChangeText={(t) => setEditedEstaEst(prev => ({ ...prev, [row.actividad]: t }))}
-                        onBlur={() => setEditingActividad(null)}
-                        onSubmitEditing={() => setEditingActividad(null)}
+                        onBlur={handleStopEdit}
+                        onSubmitEditing={handleStopEdit}
                         keyboardType="numeric"
                         autoFocus
                         style={{
@@ -804,17 +811,14 @@ ${croquesPages}
                       />
                     ) : (
                       <TouchableOpacity
-                        onPress={() => {
-                          if (editedEstaEst[row.actividad] === undefined) {
-                            setEditedEstaEst(prev => ({ ...prev, [row.actividad]: String(row.estaEstBase) }));
-                          }
-                          setEditingActividad(row.actividad);
-                        }}
+                        onPress={() => handleStartEdit(row.actividad, row.estaEstBase)}
                         activeOpacity={0.7}
+                        style={{ flexDirection: 'row', alignItems: 'center', marginTop: 1, gap: 4 }}
                       >
-                        <Text style={{ fontSize: 11, fontWeight: '800', color: '#004f11', marginTop: 1 }}>
+                        <Text style={{ fontSize: 11, fontWeight: '800', color: '#004f11' }}>
                           {row.estaEst % 1 === 0 ? row.estaEst : row.estaEst.toFixed(2)}
                         </Text>
+                        <MaterialIcons name="edit" size={10} color="#004f11" />
                       </TouchableOpacity>
                     )}
                   </View>
