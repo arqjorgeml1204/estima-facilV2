@@ -173,11 +173,20 @@ export default function ProyectoDashboard() {
           <Text style={{ fontSize: 18, fontWeight: '800', color: '#191c1e', letterSpacing: -0.3 }}>
             {proyecto.codigo}
           </Text>
-          <Text style={{ fontSize: 10, color: '#737685', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-            {proyecto.alias
-              ? `${proyecto.alias} — Contrato #${proyecto.numero_contrato}`
-              : `Contrato #${proyecto.numero_contrato}`}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={{ fontSize: 10, color: '#737685', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              {proyecto.alias
+                ? `${proyecto.alias} — Contrato #${proyecto.numero_contrato}`
+                : `Contrato #${proyecto.numero_contrato}`}
+            </Text>
+            {proyecto.numero_contrato?.match(/_([A-Z]\d+)$/)?.[1] ? (
+              <View style={{ backgroundColor: '#FFB74D', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 1 }}>
+                <Text style={{ color: '#000000', fontSize: 8, fontWeight: '800', letterSpacing: 0.5 }}>
+                  ADITIVA {proyecto.numero_contrato.match(/_([A-Z]\d+)$/)?.[1]}
+                </Text>
+              </View>
+            ) : null}
+          </View>
         </View>
         <TouchableOpacity onPress={handleEliminarContrato} activeOpacity={0.7}>
           <MaterialIcons name="delete" size={22} color="#D32F2F" />

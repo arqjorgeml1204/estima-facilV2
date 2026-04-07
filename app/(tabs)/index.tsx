@@ -66,7 +66,9 @@ export default function ProyectosScreen() {
     router.push(`/proyecto/${proyectoId}` as any);
   };
 
-  const renderProyecto = ({ item }: { item: Proyecto }) => (
+  const renderProyecto = ({ item }: { item: Proyecto }) => {
+    const aditivaSuffix = item.numero_contrato?.match(/_([A-Z]\d+)$/)?.[1];
+    return (
     <TouchableOpacity
       onPress={() => router.push(`/proyecto/${item.id}` as any)}
       activeOpacity={0.85}
@@ -89,6 +91,13 @@ export default function ProyectosScreen() {
                 {item.codigo}
               </Text>
             </View>
+            {aditivaSuffix ? (
+              <View style={{ backgroundColor: '#FFB74D', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 }}>
+                <Text style={{ color: '#000000', fontSize: 9, fontWeight: '800', letterSpacing: 0.5 }}>
+                  ADITIVA {aditivaSuffix}
+                </Text>
+              </View>
+            ) : null}
             <Text style={{ fontSize: 10, color: '#737685', fontWeight: '600' }}>
               SEM. {item.semana_actual}
             </Text>
@@ -125,7 +134,8 @@ export default function ProyectosScreen() {
         </View>
       </View>
     </TouchableOpacity>
-  );
+    );
+  };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f8f9fb' }}>

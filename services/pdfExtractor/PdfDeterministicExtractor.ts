@@ -26,6 +26,8 @@ import {
   extractNumeroContrato,
   extractDescripcionObra,
   extractMonto,
+  extractFrenteFromAlcance,
+  extractFondoGarantia,
   isStopRule,
   isTablaHeader,
   isPrototipo,
@@ -50,6 +52,8 @@ interface ParserContext {
   numeroContrato: string | null;
   descripcionObra: string | null;
   montoContrato: number | null;
+  frente: string | null;
+  fondoGarantia: number | null;
   prototipoActual: string | null;
   paqueteActual: string | null;
   subpaqueteActual: string | null;
@@ -145,6 +149,8 @@ export class PdfDeterministicExtractor {
       numeroContrato: null,
       descripcionObra: null,
       montoContrato: null,
+      frente: null,
+      fondoGarantia: null,
       prototipoActual: null,
       paqueteActual: null,
       subpaqueteActual: null,
@@ -184,20 +190,6 @@ export class PdfDeterministicExtractor {
       case ParserState.LEYENDO_ENCABEZADO: {
         context.headerBuffer += ' ' + line;
 
-        // Try extracting header fields continuously from the growing buffer
-        if (!context.numeroContrato) {
-          context.numeroContrato = extractNumeroContrato(context.headerBuffer);
-        }
-        if (!context.contratista) {
-          context.contratista = extractContratista(context.headerBuffer);
-        }
-        if (!context.descripcionObra) {
-          context.descripcionObra = extractDescripcionObra(context.headerBuffer);
-        }
-        if (context.montoContrato == null) {
-          context.montoContrato = extractMonto(context.headerBuffer);
-        }
-
         // Detect transition to alcance detallado section
         if (/alcance\s+detallado\s+de\s+contrato/i.test(line)) {
           return ParserState.ESPERANDO_ALCANCE_DETALLADO;
@@ -209,9 +201,27 @@ export class PdfDeterministicExtractor {
       case ParserState.ESPERANDO_ALCANCE_DETALLADO: {
         context.alcanceBuffer += ' ' + line;
 
-        // Keep trying to extract conjunto from the growing alcance buffer
+        // Extract ALL fields from the alcance buffer
+        if (!context.frente) {
+          context.frente = extractFrenteFromAlcance(context.alcanceBuffer);
+        }
         if (!context.conjunto) {
           context.conjunto = extractConjunto(context.alcanceBuffer);
+        }
+        if (!context.numeroContrato) {
+          context.numeroContrato = extractNumeroContrato(context.alcanceBuffer);
+        }
+        if (!context.contratista) {
+          context.contratista = extractContratista(context.alcanceBuffer);
+        }
+        if (context.fondoGarantia == null) {
+          context.fondoGarantia = extractFondoGarantia(context.alcanceBuffer);
+        }
+        if (context.montoContrato == null) {
+          context.montoContrato = extractMonto(context.alcanceBuffer);
+        }
+        if (!context.descripcionObra) {
+          context.descripcionObra = extractDescripcionObra(context.alcanceBuffer);
         }
 
         // Detect table header → transition to reading concepts
@@ -314,6 +324,8 @@ export class PdfDeterministicExtractor {
       numeroContrato: context.numeroContrato,
       descripcionObra: trimDescripcion(context.descripcionObra ?? ''),
       montoContrato: context.montoContrato,
+      frente: context.frente,
+      fondoGarantia: context.fondoGarantia,
       conceptos: Array.from(context.conceptosMap.values()),
     };
   }

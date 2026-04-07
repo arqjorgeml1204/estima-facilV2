@@ -32,11 +32,18 @@ export function collapseLine(line: string): string {
 // ─── Header extraction ───────────────────────────────────────────────────────
 
 /**
- * Extract the contractor name from the header text.
- * Looks for text between "CONTRATISTA" and "APODERADO LEGAL".
- * If the first match contains "JAVER" (that's the CONTRATANTE), skip it.
+ * Extract the contractor name.
+ * New format: "Contratista <name> Fondo de garantía"
+ * Fallback: old format "CONTRATISTA <name> APODERADO LEGAL"
  */
 export function extractContratista(text: string): string | null {
+  // New format: between "Contratista" and "Fondo de garantía"
+  const newMatch = text.match(/Contratista\s+([\s\S]+?)\s+Fondo\s+de\s+garant[ií]a/i);
+  if (newMatch) {
+    const candidate = collapseLine(newMatch[1]);
+    if (candidate) return candidate;
+  }
+  // Fallback: old format
   const re = /CONTRATISTA\s+([\s\S]*?)APODERADO\s+LEGAL/gi;
   let match: RegExpExecArray | null;
   while ((match = re.exec(text)) !== null) {
@@ -58,18 +65,32 @@ export function extractConjunto(text: string): string | null {
 }
 
 /**
- * Extract the contract number. Pattern: MX-EDI-COV-digits
+ * Extract the contract number. Pattern: MX-EDI-COV-digits with optional _AXX suffixes
  */
 export function extractNumeroContrato(text: string): string | null {
-  const match = text.match(/MX-EDI-COV-\d+/i);
+  const match = text.match(/MX-EDI-COV-\d+(?:_[A-Z]\d+)*/i);
   return match ? match[0] : null;
 }
 
 /**
- * Extract the work description between the description header and the
- * CONTRAPRESTACION header. Handles accented and non-accented variants.
+ * Extract the work description.
+ * New format: "Notas <text>" from the alcance detallado section.
+ * Fallback: old format between DESCRIPCION DEL SERVICIO and CONTRAPRESTACION.
  */
 export function extractDescripcionObra(text: string): string | null {
+  // New format: extract text after "Notas" until a known section or end
+  const notasMatch = text.match(/^Notas\s+([\s\S]+?)(?=\n(?:Elementos|Prototipos|Actividad|$))/im);
+  if (notasMatch) {
+    const desc = collapseLine(notasMatch[1]);
+    if (desc) return desc;
+  }
+  // Fallback: also try Notas without line-boundary delimiter (take rest of buffer)
+  const notasFallback = text.match(/Notas\s+([\s\S]+)/i);
+  if (notasFallback) {
+    const desc = collapseLine(notasFallback[1]);
+    if (desc) return desc;
+  }
+  // Old format
   const re = /DESCRIPCI[OÓ]N\s+DEL\s+SERVICIO\s+ESPECIALIZADO\s+A\s+REALIZAR\s*([\s\S]*?)CONTRAPRESTACI[OÓ]N\s+DEL/i;
   const match = text.match(re);
   if (!match) return null;
@@ -78,13 +99,44 @@ export function extractDescripcionObra(text: string): string | null {
 }
 
 /**
- * Extract contract amount in MXN. Pattern: $amount M.N.
+ * Extract contract amount in MXN.
+ * New format: "Monto contratado 225,100.00 MXN"
+ * Fallback: old format "$amount M.N."
  */
 export function extractMonto(text: string): number | null {
+  // New format
+  const newMatch = text.match(/Monto\s+contratado\s+([\d,]+\.\d{2})\s+MXN/i);
+  if (newMatch) {
+    const value = parseFloat(newMatch[1].replace(/,/g, ''));
+    return isNaN(value) ? null : value;
+  }
+  // Old format
   const match = text.match(/\$([\d,]+\.\d{2})\s*M\.?N\.?/i);
   if (!match) return null;
   const cleaned = match[1].replace(/,/g, '');
   const value = parseFloat(cleaned);
+  return isNaN(value) ? null : value;
+}
+
+// ─── Alcance detallado extraction ────────────────────────────────────────────
+
+/**
+ * Extract frente description from alcance detallado.
+ * Format: "Frente 01 - FRENTE 01 EDIFICACION"
+ */
+export function extractFrenteFromAlcance(text: string): string | null {
+  const match = text.match(/^Frente\s+\d+\s*-\s*(.+)$/im);
+  return match ? match[1].trim() : null;
+}
+
+/**
+ * Extract fondo de garantía percentage.
+ * Format: "Fondo de garantía 5 %"
+ */
+export function extractFondoGarantia(text: string): number | null {
+  const match = text.match(/Fondo\s+de\s+garant[ií]a\s+(\d+(?:\.\d+)?)\s*%/i);
+  if (!match) return null;
+  const value = parseFloat(match[1]);
   return isNaN(value) ? null : value;
 }
 

@@ -86,6 +86,10 @@ export interface ContratoExtraido {
   descripcionObra: string | null;
   /** Contract total amount in MXN */
   montoContrato: number | null;
+  /** e.g. "FRENTE 01 EDIFICACION" — null when not found */
+  frente: string | null;
+  /** e.g. 5 (percentage) — null when not found */
+  fondoGarantia: number | null;
   /** Ordered list of aggregated concepts */
   conceptos: Concepto[];
 }

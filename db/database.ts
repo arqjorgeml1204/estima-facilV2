@@ -40,6 +40,9 @@ export async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
       try {
         await database.execAsync(`ALTER TABLE proyecto ADD COLUMN alias TEXT DEFAULT ''`);
       } catch (_) {}
+      try {
+        await database.execAsync(`ALTER TABLE proyecto ADD COLUMN fondo_garantia REAL DEFAULT 0`);
+      } catch (_) {}
       db = database;
       return database;
     })();
@@ -113,8 +116,8 @@ export async function seedFromContract(
       empresa_id, desarrolladora_id,
       frente, conjunto, monto_contrato,
       total_unidades, factor_por_seccion, prototipo,
-      fecha_inicio, fecha_terminacion
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      fecha_inicio, fecha_terminacion, fondo_garantia
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       data.conjunto,
       data.numeroContrato,
@@ -122,7 +125,7 @@ export async function seedFromContract(
       data.descripcionObra ?? '',
       empresaId,
       desarrolladora.id,
-      'FRENTE 01',
+      data.frente || 'FRENTE 01',
       data.conjunto,
       data.montoContrato,
       totalUnidades,
@@ -130,6 +133,7 @@ export async function seedFromContract(
       prototipo,
       '',  // fechaInicio — not extracted
       '',  // fechaTerminacion — not extracted
+      data.fondoGarantia ?? 0,
     ]
   );
   const proyectoId = proyectoResult.lastInsertRowId;
