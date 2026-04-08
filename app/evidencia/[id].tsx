@@ -13,7 +13,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import {
   initDatabase, getEstimacionById, getProyectoById,
   getEvidenciasByEstimacion, insertEvidencia, deleteEvidencia,
@@ -31,6 +33,7 @@ export default function EvidenciaScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [estimacion, setEstimacion] = useState<any>(null);
   const [proyecto, setProyecto] = useState<any>(null);
   const [evidencias, setEvidencias] = useState<EvidenciaItem[]>([]);
@@ -57,6 +60,85 @@ export default function EvidenciaScreen() {
 
   useEffect(() => { load(); }, [id]);
   useFocusEffect(useCallback(() => { load(); }, [id]));
+
+  const handleExportPdf = async () => {
+    if (evidencias.length === 0) {
+      Alert.alert('Sin evidencias', 'Agrega fotos antes de exportar.');
+      return;
+    }
+    setExporting(true);
+    try {
+      // 1. Leer todas las imágenes en base64 ANTES de generar el HTML
+      const base64Map: Record<number, string> = {};
+      for (const ev of evidencias) {
+        try {
+          const info = await FileSystem.getInfoAsync(ev.imagen_uri);
+          if (info.exists) {
+            const b64 = await FileSystem.readAsStringAsync(ev.imagen_uri, { encoding: 'base64' });
+            base64Map[ev.id] = b64;
+          }
+        } catch {}
+      }
+
+      // 2. Generar HTML con grid 3 cols × 2 filas = 6 fotos por hoja
+      const perPage = 6;
+      const chunks: EvidenciaItem[][] = [];
+      for (let i = 0; i < evidencias.length; i += perPage) {
+        chunks.push(evidencias.slice(i, i + perPage));
+      }
+
+      const pagesHtml = chunks.map((chunk, pi) => `
+        <div class="${pi === 0 ? '' : 'page-break'}">
+          <div class="page-header">
+            EVIDENCIA FOTOGRÁFICA &nbsp;·&nbsp; ${proyecto?.codigo ?? ''} &nbsp;·&nbsp; Est. #${estimacion?.numero ?? ''}
+          </div>
+          <div class="foto-grid">
+            ${chunk.map((f, fi) => {
+              const b64 = base64Map[f.id];
+              const imgSrc = b64 ? `data:image/jpeg;base64,${b64}` : '';
+              return `
+              <div class="foto-cell">
+                ${imgSrc
+                  ? `<img src="${imgSrc}" class="foto-img"/>`
+                  : `<div class="foto-placeholder">Sin imagen</div>`}
+                <div class="foto-label">${pi * perPage + fi + 1}. ${f.actividad ? f.actividad + ' — ' : ''}${f.descripcion || ''}</div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>`).join('');
+
+      const html = `<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"/>
+<style>
+  @page { size: letter landscape; margin: 10mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 8px; color: #000; }
+  .page-break { page-break-before: always; padding-top: 4px; }
+  .page-header { font-size: 11px; font-weight: 700; color: #1F4E79; margin-bottom: 8px; text-transform: uppercase; border-bottom: 2px solid #1F4E79; padding-bottom: 4px; }
+  .foto-grid { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 8px; width: 100%; height: calc(100vh - 40mm); }
+  .foto-cell { display: flex; flex-direction: column; align-items: center; overflow: hidden; }
+  .foto-img { width: 100%; flex: 1; object-fit: contain; max-height: 120mm; border: 1px solid #ccc; border-radius: 4px; }
+  .foto-placeholder { width: 100%; flex: 1; background: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #999; border: 1px dashed #ccc; border-radius: 4px; }
+  .foto-label { font-size: 7px; color: #555; margin-top: 3px; text-align: center; width: 100%; }
+</style>
+</head>
+<body>${pagesHtml}</body>
+</html>`;
+
+      const { uri } = await Print.printToFileAsync({ html, base64: false, width: 792, height: 612 });
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (!isAvailable) {
+        Alert.alert('Error', 'Compartir no disponible en este dispositivo.');
+        return;
+      }
+      await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Compartir PDF Evidencias' });
+    } catch {
+      Alert.alert('Error', 'No se pudo generar el PDF de evidencias.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const pickSource = () => {
     Alert.alert('Agregar evidencia', 'Selecciona la fuente', [
@@ -162,6 +244,23 @@ export default function EvidenciaScreen() {
             {proyecto?.codigo ?? ''} · Est. #{estimacion?.numero ?? ''}
           </Text>
         </View>
+        <TouchableOpacity
+          onPress={handleExportPdf}
+          activeOpacity={0.85}
+          disabled={exporting || evidencias.length === 0}
+          style={{
+            backgroundColor: '#1F4E79', borderRadius: 8,
+            paddingHorizontal: 10, paddingVertical: 7,
+            flexDirection: 'row', alignItems: 'center', gap: 4,
+            opacity: evidencias.length === 0 ? 0.4 : 1,
+            marginRight: 4,
+          }}
+        >
+          {exporting
+            ? <ActivityIndicator size={14} color="#ffffff" />
+            : <MaterialIcons name="picture-as-pdf" size={14} color="#ffffff" />}
+          <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '700' }}>PDF</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           onPress={pickSource}
           activeOpacity={0.85}

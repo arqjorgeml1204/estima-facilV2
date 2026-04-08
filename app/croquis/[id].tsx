@@ -13,7 +13,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import {
   initDatabase, getEstimacionById, getProyectoById,
   getCroquisByEstimacion, insertCroquis, deleteCroquis,
@@ -30,6 +32,7 @@ export default function CroquisScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [estimacion, setEstimacion] = useState<any>(null);
   const [proyecto, setProyecto] = useState<any>(null);
   const [croquisList, setCroquisList] = useState<CroquisItem[]>([]);
@@ -55,6 +58,85 @@ export default function CroquisScreen() {
 
   useEffect(() => { load(); }, [id]);
   useFocusEffect(useCallback(() => { load(); }, [id]));
+
+  const handleExportPdf = async () => {
+    if (croquisList.length === 0) {
+      Alert.alert('Sin croquis', 'Agrega croquis antes de exportar.');
+      return;
+    }
+    setExporting(true);
+    try {
+      // 1. Leer todas las imágenes en base64 ANTES de generar el HTML
+      const base64Map: Record<number, string> = {};
+      for (const c of croquisList) {
+        try {
+          const info = await FileSystem.getInfoAsync(c.imagen_uri);
+          if (info.exists) {
+            const b64 = await FileSystem.readAsStringAsync(c.imagen_uri, { encoding: 'base64' });
+            base64Map[c.id] = b64;
+          }
+        } catch {}
+      }
+
+      // 2. Generar HTML con grid 2 croquis por hoja
+      const perPage = 2;
+      const chunks: CroquisItem[][] = [];
+      for (let i = 0; i < croquisList.length; i += perPage) {
+        chunks.push(croquisList.slice(i, i + perPage));
+      }
+
+      const pagesHtml = chunks.map((chunk, pi) => `
+        <div class="${pi === 0 ? '' : 'page-break'}">
+          <div class="page-header">
+            CROQUIS DEL FRENTE &nbsp;·&nbsp; ${proyecto?.codigo ?? ''} &nbsp;·&nbsp; Est. #${estimacion?.numero ?? ''}
+          </div>
+          <div class="croquis-grid">
+            ${chunk.map((c, ci) => {
+              const b64 = base64Map[c.id];
+              const imgSrc = b64 ? `data:image/jpeg;base64,${b64}` : '';
+              return `
+              <div class="croquis-item">
+                ${imgSrc
+                  ? `<img src="${imgSrc}"/>`
+                  : `<div class="croquis-placeholder">Sin imagen</div>`}
+                <div class="croquis-label">${pi * perPage + ci + 1}. ${c.descripcion || ''}</div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>`).join('');
+
+      const html = `<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"/>
+<style>
+  @page { size: letter landscape; margin: 10mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 8px; color: #000; }
+  .page-break { page-break-before: always; padding-top: 4px; }
+  .page-header { font-size: 11px; font-weight: 700; color: #1F4E79; margin-bottom: 10px; text-transform: uppercase; border-bottom: 2px solid #1F4E79; padding-bottom: 4px; }
+  .croquis-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; width: 100%; }
+  .croquis-item { text-align: center; }
+  .croquis-item img { width: 100%; object-fit: contain; max-height: 180mm; border: 1px solid #ccc; border-radius: 4px; }
+  .croquis-placeholder { width: 100%; height: 180mm; background: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #999; border: 1px dashed #ccc; border-radius: 4px; }
+  .croquis-label { font-size: 7.5px; color: #555; margin-top: 4px; text-align: center; }
+</style>
+</head>
+<body>${pagesHtml}</body>
+</html>`;
+
+      const { uri } = await Print.printToFileAsync({ html, base64: false, width: 792, height: 612 });
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (!isAvailable) {
+        Alert.alert('Error', 'Compartir no disponible en este dispositivo.');
+        return;
+      }
+      await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Compartir PDF Croquis' });
+    } catch {
+      Alert.alert('Error', 'No se pudo generar el PDF de croquis.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const pickSource = () => {
     Alert.alert('Agregar croquis', 'Selecciona la fuente', [
@@ -152,6 +234,23 @@ export default function CroquisScreen() {
             {proyecto?.codigo ?? ''} · Est. #{estimacion?.numero ?? ''}
           </Text>
         </View>
+        <TouchableOpacity
+          onPress={handleExportPdf}
+          activeOpacity={0.85}
+          disabled={exporting || croquisList.length === 0}
+          style={{
+            backgroundColor: '#1F4E79', borderRadius: 8,
+            paddingHorizontal: 10, paddingVertical: 7,
+            flexDirection: 'row', alignItems: 'center', gap: 4,
+            opacity: croquisList.length === 0 ? 0.4 : 1,
+            marginRight: 4,
+          }}
+        >
+          {exporting
+            ? <ActivityIndicator size={14} color="#ffffff" />
+            : <MaterialIcons name="picture-as-pdf" size={14} color="#ffffff" />}
+          <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '700' }}>PDF</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           onPress={pickSource}
           activeOpacity={0.85}

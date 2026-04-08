@@ -2,9 +2,13 @@
  * estimacion/[id].tsx
  * PANTALLA 1: Grid de Realización de Estimación.
  * Conceptos × Unidades (1…N). Tap = toggle, long press = input manual.
- * Fiel al diseño "Blueprint Precision" del Stitch original.
  *
- * Wave 2c: 2d (Borrar + Modo Actualización) + 2e (3 estados) + 2f (Est.#X editable)
+ * Issues implementados:
+ * #1  - Conceptos bloqueados de estimaciones previas (badge S.X)
+ * #2  - Modo Actualización con selección individual por celda
+ * #5  - Bloqueo por totalidad en Modo Actualización (badge COMPL.)
+ * #6  - Borrar estimación + reordenar consecutivos
+ * #14 - Columna ANT editable en resumen antes de guardar
  */
 
 import {
@@ -13,7 +17,7 @@ import {
   Platform,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
-import { useEffect, useState, useCallback, useRef, useMemo, memo } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -25,8 +29,8 @@ import {
   recalcularTotalesEstimacion,
   deleteEstimacion,
   updateCellStates,
-  guardarActualizacion,
   updateEstimNumero,
+  getCantidadesAnteriores,
 } from '../../db/database';
 import type { CellState } from '../../db/schema';
 
@@ -74,10 +78,19 @@ interface DetalleMap {
   [conceptoId: number]: Detalle;
 }
 
-// Mapa de cuántas unidades están en "update_pending" por concepto (UI-only)
-interface UpdatePendingMap {
-  [conceptoId: number]: boolean; // true = concepto completo marcado en modo actualización
+interface PriorData {
+  [conceptoId: number]: { cantidad: number; semana: number };
 }
+
+const emptyDetalle = (conceptoId: number): Detalle => ({
+  concepto_id: conceptoId,
+  cantidad_anterior: 0,
+  cantidad_esta_est: 0,
+  cantidad_acumulada: 0,
+  importe_esta_est: 0,
+  avance_financiero: 0,
+  cell_state: 'empty',
+});
 
 // ─── Input Manual Modal ────────────────────────────────────────────────────────
 
@@ -153,6 +166,142 @@ function InputModal({
   );
 }
 
+// ─── Summary Modal (Issue #14) ─────────────────────────────────────────────────
+
+function SummaryModal({
+  visible, conceptos, detalles, priorData,
+  onConfirm, onClose,
+}: {
+  visible: boolean;
+  conceptos: Concepto[];
+  detalles: DetalleMap;
+  priorData: PriorData;
+  onConfirm: (antOverrides: Record<number, number>) => void;
+  onClose: () => void;
+}) {
+  const [antEdits, setAntEdits] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    if (visible) setAntEdits({});
+  }, [visible]);
+
+  const activeConceptos = conceptos.filter(c => {
+    const priorLocked = priorData[c.id]?.cantidad ?? 0;
+    const det = detalles[c.id];
+    const modeActAdditions = det?.cantidad_anterior ?? 0;
+    const cantEsta = det?.cantidad_esta_est ?? 0;
+    return (priorLocked + modeActAdditions) > 0 || cantEsta > 0;
+  });
+
+  const handleConfirm = () => {
+    const overrides: Record<number, number> = {};
+    for (const c of activeConceptos) {
+      const priorLocked = priorData[c.id]?.cantidad ?? 0;
+      const det = detalles[c.id];
+      const defaultAnt = priorLocked + (det?.cantidad_anterior ?? 0);
+      const editedStr = antEdits[c.id];
+      if (editedStr !== undefined) {
+        const parsed = parseFloat(editedStr.replace(',', '.'));
+        overrides[c.id] = isNaN(parsed) || parsed < 0 ? defaultAnt : parsed;
+      } else {
+        overrides[c.id] = defaultAnt;
+      }
+    }
+    onConfirm(overrides);
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide">
+      <View style={{ flex: 1, backgroundColor: 'rgba(25,28,30,0.5)', justifyContent: 'flex-end' }}>
+        <View style={{
+          backgroundColor: '#ffffff', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+          padding: 16, paddingBottom: 40, maxHeight: '80%',
+        }}>
+          <Text style={{ fontSize: 16, fontWeight: '800', color: '#191c1e', marginBottom: 12 }}>
+            Resumen de Estimación
+          </Text>
+
+          {/* Table header */}
+          <View style={{ flexDirection: 'row', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#e0e0e0' }}>
+            <Text style={{ flex: 2, fontSize: 9, fontWeight: '700', color: '#737685', textTransform: 'uppercase' }}>Concepto</Text>
+            <Text style={{ flex: 1, fontSize: 9, fontWeight: '700', color: '#737685', textAlign: 'center', textTransform: 'uppercase' }}>Ant</Text>
+            <Text style={{ flex: 1, fontSize: 9, fontWeight: '700', color: '#737685', textAlign: 'center', textTransform: 'uppercase' }}>Esta Est.</Text>
+            <Text style={{ flex: 1.2, fontSize: 9, fontWeight: '700', color: '#737685', textAlign: 'right', textTransform: 'uppercase' }}>Importe</Text>
+          </View>
+
+          <ScrollView style={{ maxHeight: 400 }}>
+            {activeConceptos.map(c => {
+              const priorLocked = priorData[c.id]?.cantidad ?? 0;
+              const det = detalles[c.id];
+              const defaultAnt = priorLocked + (det?.cantidad_anterior ?? 0);
+              const cantEsta = det?.cantidad_esta_est ?? 0;
+              const antStr = antEdits[c.id] ?? String(defaultAnt);
+              const antVal = parseFloat(antStr.replace(',', '.')) || 0;
+              const exceeds = antVal + cantEsta > c.factor;
+              const belowMin = antVal < priorLocked;
+              const hasError = exceeds || belowMin;
+              const importe = cantEsta * c.costo_unitario;
+
+              return (
+                <View key={c.id} style={{
+                  flexDirection: 'row', alignItems: 'center', paddingVertical: 8,
+                  borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
+                }}>
+                  <View style={{ flex: 2, paddingRight: 4 }}>
+                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#191c1e' }} numberOfLines={2}>
+                      {c.descripcion}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1, alignItems: 'center' }}>
+                    <TextInput
+                      value={antStr}
+                      onChangeText={text => {
+                        const clean = text.replace(/[^0-9.,]/g, '');
+                        setAntEdits(prev => ({ ...prev, [c.id]: clean }));
+                      }}
+                      keyboardType="decimal-pad"
+                      style={{
+                        fontSize: 12, fontWeight: '700', color: '#191c1e',
+                        backgroundColor: '#f3f4f6', borderRadius: 4,
+                        paddingHorizontal: 6, paddingVertical: 4,
+                        textAlign: 'center', minWidth: 40,
+                        borderWidth: hasError ? 1.5 : 0,
+                        borderColor: hasError ? '#D32F2F' : 'transparent',
+                      }}
+                    />
+                  </View>
+                  <Text style={{ flex: 1, fontSize: 12, fontWeight: '700', color: '#191c1e', textAlign: 'center' }}>
+                    {cantEsta}
+                  </Text>
+                  <Text style={{ flex: 1.2, fontSize: 11, fontWeight: '700', color: '#003d9b', textAlign: 'right' }}>
+                    ${importe.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                  </Text>
+                </View>
+              );
+            })}
+          </ScrollView>
+
+          {/* Buttons */}
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
+            <TouchableOpacity
+              onPress={onClose}
+              style={{ flex: 1, backgroundColor: '#f3f4f6', borderRadius: 10, paddingVertical: 13, alignItems: 'center' }}
+            >
+              <Text style={{ color: '#737685', fontWeight: '700' }}>Cancelar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={handleConfirm}
+              style={{ flex: 2, backgroundColor: '#003d9b', borderRadius: 10, paddingVertical: 13, alignItems: 'center' }}
+            >
+              <Text style={{ color: '#ffffff', fontWeight: '700' }}>Guardar Estimación</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 // ─── Pantalla Principal ────────────────────────────────────────────────────────
 
 export default function EstimacionGrid() {
@@ -164,26 +313,29 @@ export default function EstimacionGrid() {
   const [proyecto, setProyecto]      = useState<any>(null);
   const [conceptos, setConceptos]    = useState<Concepto[]>([]);
   const [detalles, setDetalles]      = useState<DetalleMap>({});
+  const [priorData, setPriorData]    = useState<PriorData>({});
   const [loading, setLoading]        = useState(true);
   const [saving, setSaving]          = useState(false);
   const [totales, setTotales]        = useState({ subtotal: 0, retencion: 0, totalAPagar: 0 });
 
-  // 2f — Est. #X editable
-  const [estimNumber, setEstimNumber]       = useState<string>('1');
+  // Est. #X editable
+  const [estimNumber, setEstimNumber]         = useState<string>('1');
   const [editingEstimNum, setEditingEstimNum] = useState(false);
   const estimNumInputRef = useRef<TextInput>(null);
 
-  // 2d — Kebab menu
+  // Kebab menu
   const [menuVisible, setMenuVisible] = useState(false);
 
-  // 2d — Modo Actualización
+  // Modo Actualización
   const [modoActualizacion, setModoActualizacion] = useState(false);
-  // updatePending: conceptoId → true si el concepto completo está marcado
-  const [updatePending, setUpdatePending] = useState<UpdatePendingMap>({});
+  const [updatePending, setUpdatePending] = useState<Record<number, boolean>>({});
 
   // Modal input manual
   const [modalVisible, setModalVisible] = useState(false);
   const [modalConcepto, setModalConcepto] = useState<Concepto | null>(null);
+
+  // Summary modal (Issue #14)
+  const [summaryVisible, setSummaryVisible] = useState(false);
 
   // ── Carga inicial ────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -192,6 +344,7 @@ export default function EstimacionGrid() {
     const proy = await getProyectoById(est.proyecto_id);
     const concs = await getConceptosByProyecto(est.proyecto_id) as Concepto[];
     const dets = await getDetallesByEstimacion(estId);
+    const prior = await getCantidadesAnteriores(est.proyecto_id, estId);
 
     const detMap: DetalleMap = {};
     for (const d of dets) {
@@ -205,6 +358,7 @@ export default function EstimacionGrid() {
     setProyecto(proy);
     setConceptos(concs);
     setDetalles(detMap);
+    setPriorData(prior);
     setEstimNumber(String(est.numero ?? 1));
     setTotales({
       subtotal: est.subtotal || 0,
@@ -216,140 +370,118 @@ export default function EstimacionGrid() {
 
   useEffect(() => { load(); }, []);
 
-  // ── 2f: manejar edición de Est. #X ──────────────────────────────────────────
+  // ── Est. #X editable ───────────────────────────────────────────────────────
   const handleEstimNumberBlur = async () => {
     setEditingEstimNum(false);
     const parsed = parseInt(estimNumber, 10);
     if (isNaN(parsed) || parsed <= 0) {
-      // valor inválido — revertir al valor actual de la estimación
       setEstimNumber(String(estimacion?.numero ?? 1));
       return;
     }
-    // Guardar en AsyncStorage y en SQLite
     await AsyncStorage.setItem(ASYNC_LAST_ESTIM_NUMBER, String(parsed));
     await updateEstimNumero(estId, parsed);
     setEstimacion((prev: any) => prev ? { ...prev, numero: parsed } : prev);
   };
 
   const handleEstimNumberChange = (text: string) => {
-    // Solo permitir dígitos
     const clean = text.replace(/[^0-9]/g, '');
     setEstimNumber(clean);
   };
 
-  // ── Actualizar cantidad (tap o modal) ────────────────────────────────────────
-  const updateCantidad = async (concepto: Concepto, nuevaCantidad: number) => {
-    const anterior = detalles[concepto.id]?.cantidad_anterior ?? 0;
+  // ── Actualizar cantidad (normal mode) ──────────────────────────────────────
+  const updateCantidad = useCallback(async (concepto: Concepto, nuevaCantidad: number) => {
+    const modeActAdditions = detalles[concepto.id]?.cantidad_anterior ?? 0;
 
-    // Optimistic update
     setDetalles(prev => ({
       ...prev,
       [concepto.id]: {
         concepto_id: concepto.id,
-        cantidad_anterior: anterior,
+        cantidad_anterior: modeActAdditions,
         cantidad_esta_est: nuevaCantidad,
-        cantidad_acumulada: anterior + nuevaCantidad,
+        cantidad_acumulada: modeActAdditions + nuevaCantidad,
         importe_esta_est: nuevaCantidad * concepto.costo_unitario,
         avance_financiero: concepto.factor > 0
-          ? ((anterior + nuevaCantidad) / concepto.factor) * 100
+          ? ((modeActAdditions + nuevaCantidad) / concepto.factor) * 100
           : 0,
-        cell_state: detalles[concepto.id]?.cell_state ?? 'empty',
+        cell_state: nuevaCantidad > 0 ? 'current' : (modeActAdditions > 0 ? 'estimated_prior' : 'empty'),
       },
     }));
 
-    // Persist
-    await upsertDetalle(estId, concepto.id, anterior, nuevaCantidad, concepto.costo_unitario);
+    await upsertDetalle(estId, concepto.id, modeActAdditions, nuevaCantidad, concepto.costo_unitario);
     const t = await recalcularTotalesEstimacion(estId);
     setTotales(t);
-  };
+  }, [estId, detalles]);
 
-  // ── 2e: handleCellTap con 4 estados ─────────────────────────────────────────
-  // Estados:
-  //   "estimated"       → celda formal previa — bloqueada, no tocar
-  //   "estimated_prior" → celda de Modo Actualización — bloqueada en modo normal
-  //   "current"         → seleccionada en esta sesión
-  //   "empty"           → disponible
+  // ── handleCellTap — Issues #1, #2, #5 ─────────────────────────────────────
   const handleCellTap = useCallback((concepto: Concepto, colIdx: number) => {
-    if (isViewMode) return; // view mode: read-only
+    if (isViewMode) return;
 
-    // P1 #5: En Modo Actualización, toggle empty <-> estimated_prior por concepto
+    const priorLocked = priorData[concepto.id]?.cantidad ?? 0;
+    const modeActAdditions = detalles[concepto.id]?.cantidad_anterior ?? 0;
+    const effectiveAnterior = priorLocked + modeActAdditions;
+    const cantEsta = detalles[concepto.id]?.cantidad_esta_est ?? 0;
+
+    // ── Modo Actualización: selección individual (Issue #2) ──
     if (modoActualizacion) {
-      const det = detalles[concepto.id];
-      const persistedState = det?.cell_state ?? 'empty';
-      // Solo actuar sobre celdas empty o estimated_prior; current y estimated se ignoran
-      if (persistedState === 'current' || persistedState === 'estimated') return;
+      // Prior locked: untouchable
+      if (colIdx < priorLocked) return;
+      // Current cells: untouchable in mode actualización
+      if (colIdx >= effectiveAnterior && colIdx < effectiveAnterior + cantEsta) return;
 
-      if (persistedState === 'empty') {
-        // Marcar como estimated_prior
+      if (colIdx < effectiveAnterior) {
+        // Tap on mode-act cell → decrement
+        if (modeActAdditions <= 0) return;
         setDetalles(prev => ({
           ...prev,
           [concepto.id]: {
-            ...(prev[concepto.id] ?? {
-              concepto_id: concepto.id,
-              cantidad_anterior: 0,
-              cantidad_esta_est: 0,
-              cantidad_acumulada: 0,
-              importe_esta_est: 0,
-              avance_financiero: 0,
-            }),
-            cell_state: 'estimated_prior',
+            ...(prev[concepto.id] ?? emptyDetalle(concepto.id)),
+            cantidad_anterior: modeActAdditions - 1,
+            cell_state: (modeActAdditions - 1) > 0 ? 'estimated_prior' : (cantEsta > 0 ? 'current' : 'empty'),
           },
         }));
         setUpdatePending(prev => ({ ...prev, [concepto.id]: true }));
-      } else if (persistedState === 'estimated_prior') {
-        // Desmarcar → empty
-        setDetalles(prev => ({
-          ...prev,
-          [concepto.id]: {
-            ...(prev[concepto.id] ?? {
-              concepto_id: concepto.id,
-              cantidad_anterior: 0,
-              cantidad_esta_est: 0,
-              cantidad_acumulada: 0,
-              importe_esta_est: 0,
-              avance_financiero: 0,
-            }),
-            cell_state: 'empty',
-          },
-        }));
-        setUpdatePending(prev => {
-          const next = { ...prev };
-          delete next[concepto.id];
-          return next;
-        });
+      } else {
+        // Tap on empty cell → increment mode act
+        const maxModeAct = concepto.factor - priorLocked - cantEsta;
+        if (modeActAdditions < maxModeAct) {
+          setDetalles(prev => ({
+            ...prev,
+            [concepto.id]: {
+              ...(prev[concepto.id] ?? emptyDetalle(concepto.id)),
+              cantidad_anterior: modeActAdditions + 1,
+              cell_state: 'estimated_prior',
+            },
+          }));
+          setUpdatePending(prev => ({ ...prev, [concepto.id]: true }));
+        }
       }
       return;
     }
 
-    const cantAnterior = detalles[concepto.id]?.cantidad_anterior ?? 0;
-    const cantEsta = detalles[concepto.id]?.cantidad_esta_est ?? 0;
-    const persistedState = detalles[concepto.id]?.cell_state ?? 'empty';
+    // ── Modo Normal ──
 
-    // Celdas "estimated" y "estimated_prior" están bloqueadas
-    if (persistedState === 'estimated' || persistedState === 'estimated_prior') {
-      // Si es de estimación anterior: bloqueado completamente
-      if (colIdx < cantAnterior) return;
-    }
+    // Issue #5: fully blocked
+    if (effectiveAnterior >= concepto.factor) return;
 
-    const isEstimated = colIdx < cantAnterior;
-    const isCurrent = colIdx >= cantAnterior && colIdx < cantAnterior + cantEsta;
+    // Locked cells (prior + mode act)
+    if (colIdx < effectiveAnterior) return;
 
-    if (isEstimated) {
-      return; // bloqueado
-    } else if (isCurrent) {
+    const adjustedIdx = colIdx - effectiveAnterior;
+    if (adjustedIdx < cantEsta) {
+      // In current range → decrement
       updateCantidad(concepto, cantEsta - 1);
     } else {
-      const max = concepto.factor - cantAnterior;
-      if (cantEsta < max) {
+      // Empty → increment
+      const maxEsta = concepto.factor - effectiveAnterior;
+      if (cantEsta < maxEsta) {
         updateCantidad(concepto, cantEsta + 1);
       }
     }
-  }, [isViewMode, modoActualizacion, detalles, updateCantidad, setDetalles, setUpdatePending]);
+  }, [isViewMode, modoActualizacion, priorData, detalles, updateCantidad]);
 
   // Long press = input manual (solo en modo normal)
   const handleLongPress = useCallback((concepto: Concepto) => {
-    if (isViewMode) return;
-    if (modoActualizacion) return;
+    if (isViewMode || modoActualizacion) return;
     setModalConcepto(concepto);
     setModalVisible(true);
   }, [isViewMode, modoActualizacion]);
@@ -359,51 +491,32 @@ export default function EstimacionGrid() {
     setModalVisible(false);
   }, [modalConcepto, updateCantidad]);
 
-  // ── 2d: Modo Actualización — Marcar Todo ─────────────────────────────────────
-  // P1 #3 & #4: Solo marcar celdas empty → estimated_prior, no tocar current ni estimated
+  // ── Marcar Todo (mode actualización) ───────────────────────────────────────
   const handleMarcarTodo = useCallback((concepto: Concepto) => {
-    const det = detalles[concepto.id];
-    const state = det?.cell_state ?? 'empty';
-    // Solo marcar si está empty (no tocar current ni estimated)
-    if (state === 'current' || state === 'estimated') return;
+    const priorLocked = priorData[concepto.id]?.cantidad ?? 0;
+    const cantEsta = detalles[concepto.id]?.cantidad_esta_est ?? 0;
+    const maxModeAct = concepto.factor - priorLocked - cantEsta;
+    if (maxModeAct <= 0) return;
     setDetalles(prev => ({
       ...prev,
       [concepto.id]: {
-        ...(prev[concepto.id] ?? {
-          concepto_id: concepto.id,
-          cantidad_anterior: 0,
-          cantidad_esta_est: 0,
-          cantidad_acumulada: 0,
-          importe_esta_est: 0,
-          avance_financiero: 0,
-        }),
+        ...(prev[concepto.id] ?? emptyDetalle(concepto.id)),
+        cantidad_anterior: maxModeAct,
         cell_state: 'estimated_prior',
       },
     }));
-    setUpdatePending(prev => ({
-      ...prev,
-      [concepto.id]: true,
-    }));
-  }, [detalles]);
+    setUpdatePending(prev => ({ ...prev, [concepto.id]: true }));
+  }, [priorData, detalles]);
 
-  // P1 #4: Desmarcar Todo — revertir estimated_prior → empty
+  // ── Desmarcar Todo (mode actualización) ────────────────────────────────────
   const handleDesmarcarTodo = useCallback((concepto: Concepto) => {
-    const det = detalles[concepto.id];
-    const state = det?.cell_state ?? 'empty';
-    // Solo desmarcar si está en estimated_prior
-    if (state !== 'estimated_prior') return;
+    const cantEsta = detalles[concepto.id]?.cantidad_esta_est ?? 0;
     setDetalles(prev => ({
       ...prev,
       [concepto.id]: {
-        ...(prev[concepto.id] ?? {
-          concepto_id: concepto.id,
-          cantidad_anterior: 0,
-          cantidad_esta_est: 0,
-          cantidad_acumulada: 0,
-          importe_esta_est: 0,
-          avance_financiero: 0,
-        }),
-        cell_state: 'empty',
+        ...(prev[concepto.id] ?? emptyDetalle(concepto.id)),
+        cantidad_anterior: 0,
+        cell_state: cantEsta > 0 ? 'current' : 'empty',
       },
     }));
     setUpdatePending(prev => {
@@ -413,45 +526,37 @@ export default function EstimacionGrid() {
     });
   }, [detalles]);
 
-  // ── 2d: Guardar Actualización ─────────────────────────────────────────────────
+  // ── Guardar Actualización ──────────────────────────────────────────────────
   const handleGuardarActualizacion = useCallback(async () => {
     setSaving(true);
-    const pendingIds = Object.entries(updatePending)
-      .filter(([, marked]) => marked)
-      .map(([id]) => Number(id));
+    const pendingIds = Object.keys(updatePending).map(Number);
 
-    const costoMap: Record<number, number> = {};
-    for (const c of conceptos) {
-      costoMap[c.id] = c.costo_unitario;
+    for (const conceptoId of pendingIds) {
+      const det = detalles[conceptoId] ?? emptyDetalle(conceptoId);
+      const concepto = conceptos.find(c => c.id === conceptoId);
+      if (!concepto) continue;
+      await upsertDetalle(estId, conceptoId, det.cantidad_anterior, det.cantidad_esta_est, concepto.costo_unitario);
+      const cellState: CellState = det.cantidad_anterior > 0 ? 'estimated_prior' : (det.cantidad_esta_est > 0 ? 'current' : 'empty');
+      await updateCellStates(estId, conceptoId, cellState, concepto.costo_unitario);
     }
 
-    await guardarActualizacion(estId, pendingIds, costoMap);
+    const t = await recalcularTotalesEstimacion(estId);
+    setTotales(t);
 
-    // Actualizar estado local: los pending → estimated_prior
-    setDetalles(prev => {
-      const next = { ...prev };
-      for (const cid of pendingIds) {
-        next[cid] = {
-          ...(next[cid] ?? {
-            concepto_id: cid,
-            cantidad_anterior: 0,
-            cantidad_esta_est: 0,
-            cantidad_acumulada: 0,
-            importe_esta_est: 0,
-            avance_financiero: 0,
-          }),
-          cell_state: 'estimated_prior',
-        };
-      }
-      return next;
-    });
+    // Reload detalles from DB
+    const dets = await getDetallesByEstimacion(estId);
+    const detMap: DetalleMap = {};
+    for (const d of dets) {
+      detMap[d.concepto_id] = { ...d, cell_state: (d.cell_state as CellState) ?? 'empty' };
+    }
+    setDetalles(detMap);
 
     setUpdatePending({});
     setModoActualizacion(false);
     setSaving(false);
-  }, [updatePending, conceptos, estId]);
+  }, [updatePending, detalles, conceptos, estId]);
 
-  // ── 2d: Borrar estimación ─────────────────────────────────────────────────────
+  // ── Borrar estimación (Issue #6) ───────────────────────────────────────────
   const handleBorrarEstimacion = useCallback(() => {
     setMenuVisible(false);
     Alert.alert(
@@ -471,20 +576,60 @@ export default function EstimacionGrid() {
     );
   }, [estId]);
 
-  // ── 2d: Activar Modo Actualización ────────────────────────────────────────────
+  // ── Activar Modo Actualización ─────────────────────────────────────────────
   const handleActivarModoActualizacion = useCallback(() => {
     setMenuVisible(false);
     setUpdatePending({});
     setModoActualizacion(true);
   }, []);
 
-  // ── Guardar normal ───────────────────────────────────────────────────────────
-  const handleGuardar = useCallback(async () => {
+  // ── Guardar normal → muestra resumen (Issue #14) ───────────────────────────
+  const handleGuardar = useCallback(() => {
+    setSummaryVisible(true);
+  }, []);
+
+  // ── Summary confirm (Issue #14) ────────────────────────────────────────────
+  const handleSummaryConfirm = useCallback(async (antOverrides: Record<number, number>) => {
     setSaving(true);
-    await recalcularTotalesEstimacion(estId);
+    setSummaryVisible(false);
+
+    for (const c of conceptos) {
+      const priorLocked = priorData[c.id]?.cantidad ?? 0;
+      const det = detalles[c.id];
+      const cantEsta = det?.cantidad_esta_est ?? 0;
+
+      // antOverrides[c.id] = full ANT (priorLocked + modeAct) from summary
+      const fullAnt = antOverrides[c.id];
+      if (fullAnt === undefined && cantEsta === 0) continue;
+
+      let modeActAdditions = fullAnt !== undefined
+        ? Math.max(0, fullAnt - priorLocked)
+        : (det?.cantidad_anterior ?? 0);
+
+      // Clamp: can't exceed factor
+      modeActAdditions = Math.min(modeActAdditions, Math.max(0, c.factor - priorLocked - cantEsta));
+
+      if (cantEsta > 0 || modeActAdditions > 0) {
+        await upsertDetalle(estId, c.id, modeActAdditions, cantEsta, c.costo_unitario);
+        const cellState: CellState = cantEsta > 0 ? 'current' : 'estimated_prior';
+        await updateCellStates(estId, c.id, cellState, c.costo_unitario);
+      }
+    }
+
+    const t = await recalcularTotalesEstimacion(estId);
+    setTotales(t);
+
+    // Reload detalles
+    const dets = await getDetallesByEstimacion(estId);
+    const detMap: DetalleMap = {};
+    for (const d of dets) {
+      detMap[d.concepto_id] = { ...d, cell_state: (d.cell_state as CellState) ?? 'empty' };
+    }
+    setDetalles(detMap);
+
     setSaving(false);
     Alert.alert('Guardado', 'La estimación fue guardada correctamente.');
-  }, [estId]);
+  }, [conceptos, priorData, detalles, estId]);
 
   // ── Loading ──────────────────────────────────────────────────────────────────
   if (loading) {
@@ -513,61 +658,52 @@ export default function EstimacionGrid() {
     paquetes[paquetes.length - 1].conceptos.push(c);
   }
 
-  // ── Helper: color de celda ────────────────────────────────────────────────────
-  // Estado de la celda (colIdx) para un concepto en modo normal:
-  //   estimated_prior → toda la fila es verde oscuro sin número (bloqueada)
-  //   estimated       → celdas < cantAnterior (verde oscuro + número)
-  //   current         → celdas en rango esta estimación (verde claro + semana)
-  //   empty           → resto (gris)
+  // ── Helper: cell visual (Issues #1, #2, #5) ─────────────────────────────────
   const getCellVisual = (
     concepto: Concepto,
     colIdx: number,
-  ): { bg: string; text: string | null; blocked: boolean } => {
-    const det = detalles[concepto.id];
-    const cantAnterior = det?.cantidad_anterior ?? 0;
-    const cantEsta = det?.cantidad_esta_est ?? 0;
-    const persistedState = det?.cell_state ?? 'empty';
-    const isPending = updatePending[concepto.id] === true;
+  ): { bg: string; text: string | null; blocked: boolean; badgeText: string | null } => {
+    const priorLocked = priorData[concepto.id]?.cantidad ?? 0;
+    const priorSemana = priorData[concepto.id]?.semana ?? 0;
+    const modeActAdditions = detalles[concepto.id]?.cantidad_anterior ?? 0;
+    const effectiveAnterior = priorLocked + modeActAdditions;
+    const cantEsta = detalles[concepto.id]?.cantidad_esta_est ?? 0;
 
-    // Modo Actualización: toda la fila marcada → azul
-    if (modoActualizacion && isPending) {
-      return { bg: '#2196F3', text: null, blocked: false };
+    // Prior locked cells (from other estimaciones) — Issue #1
+    if (colIdx < priorLocked) {
+      return { bg: '#1A7A3C', text: null, blocked: true, badgeText: priorSemana > 0 ? `S.${priorSemana}` : null };
     }
 
-    // estimated_prior: toda la fila verde oscuro, sin número
-    if (persistedState === 'estimated_prior') {
-      return { bg: '#1A7A3C', text: null, blocked: true };
+    // Mode actualización anterior cells
+    if (colIdx < effectiveAnterior) {
+      if (modoActualizacion) {
+        return { bg: '#2196F3', text: null, blocked: false, badgeText: null };
+      }
+      return { bg: '#1A7A3C', text: null, blocked: true, badgeText: null };
     }
 
-    const isAnterior = colIdx < cantAnterior;
-    const isEsta = colIdx >= cantAnterior && colIdx < cantAnterior + cantEsta;
+    // Current cells
+    if (colIdx < effectiveAnterior + cantEsta) {
+      return { bg: '#4CAF50', text: String(currentWeek), blocked: modoActualizacion, badgeText: null };
+    }
 
-    if (isAnterior) {
-      // estimated: verde oscuro + número de semana (colIdx+1 como placeholder)
-      return { bg: '#1A7A3C', text: String(colIdx + 1), blocked: true };
-    }
-    if (isEsta) {
-      // current: verde claro + semana actual
-      return { bg: '#4CAF50', text: String(currentWeek), blocked: false };
-    }
-    // empty
-    return { bg: '#E0E0E0', text: null, blocked: false };
+    // Empty
+    return { bg: '#E0E0E0', text: null, blocked: false, badgeText: null };
   };
 
-  // ── Contador Update Mode ──────────────────────────────────────────────────────
-  // P1 #3: Solo contar celdas estimated_prior (nuevas en este modo), no current ni estimated
+  // ── Update counter (mode actualización) ──────────────────────────────────────
   const getUpdateCounter = (concepto: Concepto): string => {
-    const total = concepto.factor;
-    const det = detalles[concepto.id];
-    const state = det?.cell_state ?? 'empty';
-    const marked = state === 'estimated_prior' ? total : 0;
-    return `${marked}/${total}`;
+    const priorLocked = priorData[concepto.id]?.cantidad ?? 0;
+    const modeActAdditions = detalles[concepto.id]?.cantidad_anterior ?? 0;
+    const cantEsta = detalles[concepto.id]?.cantidad_esta_est ?? 0;
+    const available = concepto.factor - priorLocked - cantEsta;
+    return `${modeActAdditions}/${available}`;
   };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
 
-      {/* ── 2d: Banner Modo Actualización - never shown in view mode ── */}
+      {/* ── Banner Modo Actualización ── */}
       {modoActualizacion && !isViewMode && (
         <View style={{
           backgroundColor: '#0D47A1', paddingVertical: 10, paddingHorizontal: 16,
@@ -620,7 +756,7 @@ export default function EstimacionGrid() {
             </Text>
           </View>
         </View>
-        {/* 2d: Kebab menu button - hidden in view mode */}
+        {/* Kebab menu - hidden in view mode */}
         {!isViewMode && (
           <TouchableOpacity
             style={{ padding: 6, borderRadius: 99 }}
@@ -631,7 +767,7 @@ export default function EstimacionGrid() {
         )}
       </View>
 
-      {/* ── 2d: Kebab Menu Modal ── */}
+      {/* ── Kebab Menu Modal ── */}
       <Modal
         visible={menuVisible}
         transparent
@@ -721,7 +857,7 @@ export default function EstimacionGrid() {
               Semana actual: <Text style={{ color: '#003d9b' }}>{currentWeek}</Text>
             </Text>
           </View>
-          {/* 2f: Est. #X editable */}
+          {/* Est. #X editable */}
           <TouchableOpacity
             onPress={() => {
               setEditingEstimNum(true);
@@ -761,7 +897,7 @@ export default function EstimacionGrid() {
         shadowColor: '#191c1e', shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
       }}>
-        {/* 2e: Leyenda actualizada */}
+        {/* Leyenda */}
         <View style={{
           paddingHorizontal: 14, paddingVertical: 8,
           flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -824,10 +960,12 @@ export default function EstimacionGrid() {
 
                   {paq.conceptos.map((concepto, idx) => {
                     const det = detalles[concepto.id];
+                    const priorLocked = priorData[concepto.id]?.cantidad ?? 0;
+                    const modeActAdditions = det?.cantidad_anterior ?? 0;
+                    const effectiveAnterior = priorLocked + modeActAdditions;
                     const cantEsta = det?.cantidad_esta_est ?? 0;
-                    const cantAnterior = det?.cantidad_anterior ?? 0;
                     const isEvenRow = idx % 2 === 0;
-                    const isPending = updatePending[concepto.id] === true;
+                    const isFullyBlocked = effectiveAnterior >= concepto.factor;
 
                     return (
                       <View
@@ -844,11 +982,10 @@ export default function EstimacionGrid() {
                           borderRightWidth: 1, borderRightColor: 'rgba(195,198,214,0.1)',
                           justifyContent: 'center',
                         }}>
-                          {/* 2d: Modo Actualización — fila de controles */}
+                          {/* Modo Actualización — controles */}
                           {modoActualizacion && (
                             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                               <View style={{ flexDirection: 'row', gap: 4 }}>
-                                {/* Botón MARCAR TODO */}
                                 <TouchableOpacity
                                   onPress={() => handleMarcarTodo(concepto)}
                                   style={{
@@ -860,7 +997,6 @@ export default function EstimacionGrid() {
                                     Marcar
                                   </Text>
                                 </TouchableOpacity>
-                                {/* P1 #4: Botón DESMARCAR TODO */}
                                 <TouchableOpacity
                                   onPress={() => handleDesmarcarTodo(concepto)}
                                   style={{
@@ -873,7 +1009,6 @@ export default function EstimacionGrid() {
                                   </Text>
                                 </TouchableOpacity>
                               </View>
-                              {/* Contador X/Y */}
                               <Text style={{ fontSize: 9, fontWeight: '700', color: '#2196F3' }}>
                                 {getUpdateCounter(concepto)}
                               </Text>
@@ -885,11 +1020,27 @@ export default function EstimacionGrid() {
                           <Text style={{ fontSize: 9, fontWeight: '600', color: '#003d9b', marginTop: 2 }}>
                             ${concepto.costo_unitario.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
                           </Text>
+                          {/* Issue #1: prior count indicator */}
+                          {priorLocked > 0 && !modoActualizacion && (
+                            <Text style={{ fontSize: 8, fontWeight: '600', color: '#737685', marginTop: 1 }}>
+                              ({priorLocked} EST. PREV)
+                            </Text>
+                          )}
+                          {/* Issue #5: COMPL. badge */}
+                          {isFullyBlocked && !modoActualizacion && (
+                            <View style={{
+                              backgroundColor: '#1A7A3C', borderRadius: 3,
+                              paddingHorizontal: 4, paddingVertical: 1, marginTop: 2,
+                              alignSelf: 'flex-start',
+                            }}>
+                              <Text style={{ color: '#ffffff', fontSize: 7, fontWeight: '800' }}>COMPL.</Text>
+                            </View>
+                          )}
                         </View>
 
                         {/* Celdas interactivas */}
                         {Array.from({ length: colCount }, (_, colIdx) => {
-                          const { bg, text, blocked } = getCellVisual(concepto, colIdx);
+                          const { bg, text, blocked, badgeText } = getCellVisual(concepto, colIdx);
 
                           return (
                             <TouchableOpacity
@@ -917,6 +1068,18 @@ export default function EstimacionGrid() {
                                   <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
                                     {text}
                                   </Text>
+                                )}
+                                {/* Issue #1: badge S.X en esquina superior derecha */}
+                                {badgeText !== null && (
+                                  <View style={{
+                                    position: 'absolute', top: 1, right: 1,
+                                    backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 2,
+                                    paddingHorizontal: 2, paddingVertical: 0.5,
+                                  }}>
+                                    <Text style={{ color: '#ffffff', fontSize: 6, fontWeight: '700' }}>
+                                      {badgeText}
+                                    </Text>
+                                  </View>
                                 )}
                               </View>
                             </TouchableOpacity>
@@ -1049,7 +1212,7 @@ export default function EstimacionGrid() {
           </TouchableOpacity>
         </View>
       ) : (
-        // 2d: Modo Actualización — botón único "Guardar Actualización"
+        // Modo Actualización — botón único "Guardar Actualización"
         <View style={{
           backgroundColor: '#ffffff',
           paddingHorizontal: 16, paddingBottom: Platform.OS === 'ios' ? 28 : 16,
@@ -1084,6 +1247,16 @@ export default function EstimacionGrid() {
         valorActual={modalConcepto ? (detalles[modalConcepto.id]?.cantidad_esta_est ?? 0) : 0}
         onConfirm={handleModalConfirm}
         onClose={() => setModalVisible(false)}
+      />
+
+      {/* ── Summary Modal (Issue #14) ── */}
+      <SummaryModal
+        visible={summaryVisible}
+        conceptos={conceptos}
+        detalles={detalles}
+        priorData={priorData}
+        onConfirm={handleSummaryConfirm}
+        onClose={() => setSummaryVisible(false)}
       />
     </SafeAreaView>
   );

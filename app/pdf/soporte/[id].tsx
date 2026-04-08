@@ -129,6 +129,7 @@ export default function PdfSoporte() {
   const [retencion, setRetencion] = useState<number>(5);
   const [retencionText, setRetencionText] = useState<string>('5');
   const [evidenciasBase64, setEvidenciasBase64] = useState<Record<string, string>>({});
+  const [croquisBase64, setCroquisBase64] = useState<Record<string, string>>({});
 
   useEffect(() => {
     (async () => {
@@ -173,7 +174,7 @@ export default function PdfSoporte() {
         try {
           const info = await FileSystem.getInfoAsync(ev.imagen_uri);
           if (info.exists) {
-            const b64 = await FileSystem.readAsStringAsync(ev.imagen_uri, { encoding: 'base64' });
+            const b64 = await FileSystem.readAsStringAsync(ev.imagen_uri, { encoding: 'base64' as any });
             map[ev.id] = b64;
           }
         } catch (e) {
@@ -183,6 +184,26 @@ export default function PdfSoporte() {
       setEvidenciasBase64(map);
     })();
   }, [evidencias]);
+
+  // ── Cargar croquis como base64 cuando croquisList cambia ─────────────────────
+  useEffect(() => {
+    if (croquisList.length === 0) return;
+    (async () => {
+      const map: Record<string, string> = {};
+      for (const c of croquisList) {
+        try {
+          const info = await FileSystem.getInfoAsync(c.imagen_uri);
+          if (info.exists) {
+            const b64 = await FileSystem.readAsStringAsync(c.imagen_uri, { encoding: 'base64' as any });
+            map[c.id] = b64;
+          }
+        } catch (e) {
+          console.warn('[PdfSoporte] No se pudo leer croquis:', c.id, e);
+        }
+      }
+      setCroquisBase64(map);
+    })();
+  }, [croquisList]);
 
   // ── Lookup map: actividad → concepto (for paquete/subpaquete) ───────────────
   const conceptoMap: Record<string, any> = {};
@@ -380,25 +401,25 @@ export default function PdfSoporte() {
     const totalAcumImp = computedRows.reduce((s, r) => s + r.importeAcum, 0);
     const totalAvance = totalImporteContrato > 0 ? (totalAcumImp / totalImporteContrato) * 100 : 0;
 
-    // ── Hoja 2: Evidencia fotográfica (condicional) — #6 fotos base64, #24 grid adaptativo
+    // ── Hoja 2: Evidencia fotográfica — 6 fotos por hoja (3 cols × 2 filas)
     let evidenciaPages = '';
     if (evidencias.length > 0) {
-      // Grid adaptativo: <=3 → 1col, <=6 → 2col, <=9 → 3col
-      const gridCols = evidencias.length <= 3 ? 1 : evidencias.length <= 6 ? 2 : 3;
-      const perPage = gridCols * 3; // 3 rows per page
+      const perPage = 6; // siempre 3 columnas × 2 filas
       const chunks: any[][] = [];
       for (let i = 0; i < evidencias.length; i += perPage) chunks.push(evidencias.slice(i, i + perPage));
       evidenciaPages = chunks.map((chunk, pi) => `
         <div class="page-break">
           ${buildHeader('EVIDENCIA FOTOGRÁFICA')}
           <div class="section-title">EVIDENCIA FOTOGRÁFICA</div>
-          <div style="display:grid;grid-template-columns:repeat(${gridCols},1fr);gap:10px;">
+          <div class="foto-grid-6">
             ${chunk.map((f: any, fi: number) => {
               const b64 = evidenciasBase64[f.id];
-              const imgSrc = b64 ? `data:image/jpeg;base64,${b64}` : f.imagen_uri;
+              const imgSrc = b64 ? `data:image/jpeg;base64,${b64}` : '';
               return `
               <div class="foto-cell">
-                <img src="${imgSrc}" class="foto-img"/>
+                ${imgSrc
+                  ? `<img src="${imgSrc}" class="foto-img"/>`
+                  : `<div class="foto-placeholder">Sin imagen</div>`}
                 <div class="media-label">${pi * perPage + fi + 1}. ${f.descripcion || f.actividad || ''}</div>
               </div>`;
             }).join('')}
@@ -406,7 +427,7 @@ export default function PdfSoporte() {
         </div>`).join('');
     }
 
-    // ── Hoja 3: Croquis (condicional) ───────────────────────────────────────
+    // ── Hoja 3: Croquis — 2 por hoja, imágenes en base64 ────────────────────
     let croquesPages = '';
     if (croquisList.length > 0) {
       const chunks: any[][] = [];
@@ -415,12 +436,18 @@ export default function PdfSoporte() {
         <div class="page-break">
           ${buildHeader('CROQUIS')}
           <div class="section-title">CROQUIS</div>
-          <div style="display:flex;flex-direction:column;gap:16px;align-items:center;">
-            ${chunk.map((c: any, ci: number) => `
-              <div style="width:100%;text-align:center;">
-                <img src="${c.imagen_uri}" style="max-width:100%;max-height:300px;object-fit:contain;border-radius:4px;border:1px solid #bbb;"/>
+          <div class="croquis-grid">
+            ${chunk.map((c: any, ci: number) => {
+              const b64 = croquisBase64[c.id];
+              const imgSrc = b64 ? `data:image/jpeg;base64,${b64}` : '';
+              return `
+              <div class="croquis-item">
+                ${imgSrc
+                  ? `<img src="${imgSrc}"/>`
+                  : `<div class="foto-placeholder">Sin imagen</div>`}
                 <div class="media-label">${pi * 2 + ci + 1}. ${c.descripcion || ''}</div>
-              </div>`).join('')}
+              </div>`;
+            }).join('')}
           </div>
         </div>`).join('');
     }
@@ -483,11 +510,19 @@ export default function PdfSoporte() {
 
   /* ── Page break + sections ────────────────────────────── */
   .page-break { page-break-before: always; padding-top: 8px; }
-  .section-title { font-size: 11px; font-weight: 700; color: #1F4E79; text-transform: uppercase; letter-spacing: 1px; margin: 4px 0 12px; }
-  .foto-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .foto-cell { text-align: center; }
-  .foto-img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 4px; border: 1px solid #bbb; }
-  .media-label { font-size: 7.5px; color: #555; margin-top: 4px; text-align: center; }
+  .section-title { font-size: 11px; font-weight: 700; color: #1F4E79; text-transform: uppercase; letter-spacing: 1px; margin: 4px 0 8px; }
+
+  /* ── Evidencia: 3 cols × 2 filas = 6 fotos por hoja ──── */
+  .foto-grid-6 { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 8px; width: 100%; height: calc(100vh - 40mm); }
+  .foto-cell { display: flex; flex-direction: column; align-items: center; overflow: hidden; }
+  .foto-img { width: 100%; flex: 1; object-fit: contain; max-height: 120mm; border-radius: 4px; border: 1px solid #bbb; }
+  .foto-placeholder { width: 100%; flex: 1; background: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 9px; color: #999; border: 1px solid #ddd; border-radius: 4px; }
+  .media-label { font-size: 7px; color: #555; margin-top: 3px; text-align: center; width: 100%; }
+
+  /* ── Croquis: 2 por hoja ──────────────────────────────── */
+  .croquis-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; width: 100%; }
+  .croquis-item { text-align: center; }
+  .croquis-item img { width: 100%; object-fit: contain; max-height: 180mm; border-radius: 4px; border: 1px solid #bbb; }
 </style>
 </head>
 <body>

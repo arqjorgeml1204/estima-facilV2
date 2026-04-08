@@ -349,11 +349,85 @@ export async function recalcularTotalesEstimacion(estimacionId: number) {
   return { subtotal, retencion, totalAPagar };
 }
 
-// ─── Borrar Estimación ────────────────────────────────────────────────────────
+// ─── Cantidades Anteriores (Issue #1) ─────────────────────────────────────────
+
+/**
+ * Retorna para cada concepto del proyecto la cantidad ya estimada en estimaciones
+ * ANTERIORES (excluyendo la estimación actual).
+ * cantidad = SUM(cantidad_acumulada) de todas las otras estimaciones
+ * semana   = MAX(week_number) de la estimación más reciente donde fue estimado
+ */
+export async function getCantidadesAnteriores(
+  proyectoId: number,
+  estimacionActualId: number
+): Promise<Record<number, { cantidad: number; semana: number }>> {
+  const database = getDb();
+  const rows = await database.getAllAsync<{
+    concepto_id: number;
+    total_cantidad: number;
+    max_semana: number;
+  }>(
+    `SELECT d.concepto_id,
+            SUM(d.cantidad_acumulada) as total_cantidad,
+            MAX(e.week_number) as max_semana
+     FROM detalle_estimacion d
+     JOIN estimacion e ON e.id = d.estimacion_id
+     WHERE e.proyecto_id = ? AND e.id != ? AND d.cantidad_acumulada > 0
+     GROUP BY d.concepto_id`,
+    [proyectoId, estimacionActualId]
+  );
+
+  const result: Record<number, { cantidad: number; semana: number }> = {};
+  for (const row of rows) {
+    result[row.concepto_id] = {
+      cantidad: row.total_cantidad,
+      semana: row.max_semana,
+    };
+  }
+  return result;
+}
+
+// ─── Borrar Estimación (Issue #6: reordenar consecutivos) ────────────────────
 
 export async function deleteEstimacion(estimacionId: number): Promise<void> {
-  // ON DELETE CASCADE elimina detalle_estimacion, evidencia y croquis automáticamente
-  await getDb().runAsync('DELETE FROM estimacion WHERE id=?', [estimacionId]);
+  const database = getDb();
+
+  // 1. Get estimacion info
+  const est = await database.getFirstAsync<{ numero: number; proyecto_id: number }>(
+    'SELECT numero, proyecto_id FROM estimacion WHERE id=?', [estimacionId]
+  );
+  if (!est) return;
+
+  // 2-4. Delete related records explicitly
+  await database.runAsync('DELETE FROM detalle_estimacion WHERE estimacion_id=?', [estimacionId]);
+  await database.runAsync('DELETE FROM evidencia WHERE estimacion_id=?', [estimacionId]);
+  await database.runAsync('DELETE FROM croquis WHERE estimacion_id=?', [estimacionId]);
+
+  // 5. Delete the estimacion
+  await database.runAsync('DELETE FROM estimacion WHERE id=?', [estimacionId]);
+
+  // 6. Reorder: decrement numero for all estimaciones after the deleted one
+  await database.runAsync(
+    'UPDATE estimacion SET numero = numero - 1 WHERE proyecto_id=? AND numero > ?',
+    [est.proyecto_id, est.numero]
+  );
+
+  // 7. Update project counter to MAX(numero) or 0
+  const maxRow = await database.getFirstAsync<{ max_num: number }>(
+    'SELECT COALESCE(MAX(numero), 0) as max_num FROM estimacion WHERE proyecto_id=?',
+    [est.proyecto_id]
+  );
+  await database.runAsync(
+    'UPDATE proyecto SET numero_estimacion_actual=? WHERE id=?',
+    [maxRow?.max_num ?? 0, est.proyecto_id]
+  );
+}
+
+// ─── Actualizar alias de proyecto ──────────────────────────────────────────────
+
+export async function updateProyectoAlias(proyectoId: number, alias: string): Promise<void> {
+  const database = getDb();
+  await database.runAsync('UPDATE proyecto SET alias=? WHERE id=?', [alias, proyectoId]);
 }
 
 // ─── Borrar Proyecto (cascada) ────────────────────────────────────────────────
