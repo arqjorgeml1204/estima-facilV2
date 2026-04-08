@@ -18,6 +18,7 @@ export function cleanLine(line: string): string {
   return line
     .replace(/[\x00-\x1F\x7F]/g, '')
     .replace(/[–—]/g, '-')
+    .replace(/\s*Page\s+\d+\s+of\s+\d+\s*/gi, '')
     .trim();
 }
 
