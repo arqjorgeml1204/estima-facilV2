@@ -8,7 +8,7 @@ import {
   View, Text, TouchableOpacity, Modal, ActivityIndicator,
   ScrollView, Platform,
 } from 'react-native';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
 import { PdfDeterministicExtractor, ContratoExtraido } from '../services/pdfExtractor';
 import { seedFromContract, getEmpresa, upsertEmpresa } from '../db/database';
@@ -29,6 +29,16 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
   const [fileName, setFileName]   = useState('');
   const [errorMsg, setErrorMsg]   = useState('');
   const bridgeRef                 = useRef<PdfBridgeRef>(null);
+
+  // Reset state when modal reopens (fixes #7: stuck on "contrato cargado")
+  useEffect(() => {
+    if (visible) {
+      setStep('idle');
+      setContrato(null);
+      setErrorMsg('');
+      setFileName('');
+    }
+  }, [visible]);
 
   // ── 1. Seleccionar PDF ─────────────────────────────────────────────────────
   const handlePickPDF = async () => {

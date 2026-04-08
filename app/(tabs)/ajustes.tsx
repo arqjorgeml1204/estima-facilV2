@@ -252,7 +252,14 @@ export default function AjustesScreen() {
 
           {/* Cerrar Sesión */}
           <TouchableOpacity
-            onPress={() => router.replace('/(auth)/login')}
+            onPress={async () => {
+              await AsyncStorage.multiRemove([
+                '@estimafacil:logged', '@estimafacil:email',
+                '@estimafacil:remember', '@estimafacil:firstTime',
+                'obra', 'frente',
+              ]);
+              router.replace('/(auth)/login');
+            }}
             style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10 }}
             activeOpacity={0.7}
           >

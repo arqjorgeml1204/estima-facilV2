@@ -6,13 +6,14 @@
 
 import {
   View, Text, TouchableOpacity, FlatList,
-  ActivityIndicator, SafeAreaView,
+  ActivityIndicator, Alert, Modal, TextInput,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useEffect, useState, useCallback } from 'react';
 import { router, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
-import { initDatabase, getProyectos } from '../../db/database';
+import { initDatabase, getProyectos, deleteProyecto, updateProyectoAlias } from '../../db/database';
 import ContractUploadModal from '../../components/ContractUploadModal';
 
 const STORAGE_KEY_FIRST_TIME = '@estimafacil:firstTime';
@@ -25,12 +26,15 @@ interface Proyecto {
   monto_contrato: number;
   semana_actual: number;
   numero_estimacion_actual: number;
+  alias?: string;
 }
 
 export default function ProyectosScreen() {
   const [proyectos, setProyectos]  = useState<Proyecto[]>([]);
   const [loading, setLoading]      = useState(true);
   const [showModal, setShowModal]  = useState(false);
+  const [editingId, setEditingId]  = useState<number | null>(null);
+  const [editAlias, setEditAlias]  = useState('');
 
   useEffect(() => {
     (async () => {
@@ -66,6 +70,32 @@ export default function ProyectosScreen() {
     router.push(`/proyecto/${proyectoId}` as any);
   };
 
+  const handleDelete = (proyecto: Proyecto) => {
+    Alert.alert(
+      'Borrar proyecto',
+      `¿Borrar proyecto ${proyecto.nombre}? Esta acción no se puede deshacer.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Borrar', style: 'destructive',
+          onPress: async () => {
+            await deleteProyecto(proyecto.id);
+            await loadProyectos();
+          },
+        },
+      ],
+    );
+  };
+
+  const handleSaveAlias = async () => {
+    if (editingId != null) {
+      await updateProyectoAlias(editingId, editAlias.trim());
+      setEditingId(null);
+      setEditAlias('');
+      await loadProyectos();
+    }
+  };
+
   const renderProyecto = ({ item }: { item: Proyecto }) => {
     const aditivaSuffix = item.numero_contrato?.match(/_([A-Z]\d+)$/)?.[1];
     return (
@@ -85,7 +115,7 @@ export default function ProyectosScreen() {
     >
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <View style={{ flex: 1 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
             <View style={{ backgroundColor: '#003d9b', borderRadius: 4, paddingHorizontal: 8, paddingVertical: 2 }}>
               <Text style={{ color: '#ffffff', fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>
                 {item.codigo}
@@ -99,7 +129,7 @@ export default function ProyectosScreen() {
               </View>
             ) : null}
             <Text style={{ fontSize: 10, color: '#737685', fontWeight: '600' }}>
-              SEM. {item.semana_actual}
+              ESTIM #{item.numero_estimacion_actual} | SEM. #{item.semana_actual}
             </Text>
           </View>
           <Text style={{ fontSize: 13, fontWeight: '700', color: '#191c1e', lineHeight: 18 }}>
@@ -109,7 +139,23 @@ export default function ProyectosScreen() {
             {item.numero_contrato}
           </Text>
         </View>
-        <MaterialIcons name="chevron-right" size={20} color="#c3c6d6" />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <TouchableOpacity
+            onPress={(e) => { e.stopPropagation?.(); setEditAlias(item.alias || ''); setEditingId(item.id); }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="edit" size={18} color="#2196F3" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={(e) => { e.stopPropagation?.(); handleDelete(item); }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="delete" size={18} color="#F44336" />
+          </TouchableOpacity>
+          <MaterialIcons name="chevron-right" size={20} color="#c3c6d6" />
+        </View>
       </View>
 
       <View style={{
@@ -138,7 +184,7 @@ export default function ProyectosScreen() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
       <View style={{
         flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
         paddingHorizontal: 16, paddingVertical: 14,
@@ -198,6 +244,39 @@ export default function ProyectosScreen() {
           showsVerticalScrollIndicator={false}
         />
       )}
+
+      {/* Modal editar alias */}
+      <Modal visible={editingId != null} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 32 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 20 }}>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: '#191c1e', marginBottom: 12 }}>
+              Editar alias
+            </Text>
+            <TextInput
+              value={editAlias}
+              onChangeText={setEditAlias}
+              placeholder="aditiva de ..."
+              placeholderTextColor="#c3c6d6"
+              style={{
+                backgroundColor: '#e7e8ea', borderRadius: 8,
+                paddingHorizontal: 14, paddingVertical: 12,
+                fontSize: 14, color: '#191c1e',
+                borderBottomWidth: 2, borderBottomColor: '#003d9b',
+                marginBottom: 16,
+              }}
+              autoFocus
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 12 }}>
+              <TouchableOpacity onPress={() => { setEditingId(null); setEditAlias(''); }}>
+                <Text style={{ fontSize: 14, color: '#737685', fontWeight: '600' }}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleSaveAlias}>
+                <Text style={{ fontSize: 14, color: '#003d9b', fontWeight: '700' }}>Guardar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <ContractUploadModal
         visible={showModal}
