@@ -318,16 +318,64 @@ export class PdfDeterministicExtractor {
    * document order established during line processing.
    */
   private buildResult(context: ParserContext): ContratoExtraido {
+    // Fallback: try header buffer for fields not found in alcance detallado
+    let contratista = context.contratista;
+    if (!contratista) {
+      contratista = extractContratista(context.headerBuffer);
+    }
+    // Last-resort contratista: scan alcance buffer for "CONTRATISTA:" or similar
+    if (!contratista) {
+      contratista = this.extractContratistaFallback(context.alcanceBuffer)
+        || this.extractContratistaFallback(context.headerBuffer);
+    }
+
+    let descripcionObra = context.descripcionObra;
+    if (!descripcionObra) {
+      descripcionObra = extractDescripcionObra(context.headerBuffer);
+    }
+
+    // Fallback for numeroContrato / monto from header if alcance missed them
+    const numeroContrato = context.numeroContrato
+      || extractNumeroContrato(context.headerBuffer);
+    const montoContrato = context.montoContrato
+      ?? extractMonto(context.headerBuffer);
+
     return {
-      contratista: context.contratista,
+      contratista,
       conjunto: context.conjunto,
-      numeroContrato: context.numeroContrato,
-      descripcionObra: trimDescripcion(context.descripcionObra ?? ''),
-      montoContrato: context.montoContrato,
+      numeroContrato,
+      descripcionObra: trimDescripcion(descripcionObra ?? ''),
+      montoContrato,
       frente: context.frente,
       fondoGarantia: context.fondoGarantia,
       conceptos: Array.from(context.conceptosMap.values()),
     };
+  }
+
+  /**
+   * Last-resort contratista extraction: looks for lines containing keywords
+   * like "CONTRATISTA", "EMPRESA", "RAZÓN SOCIAL" followed by ":"
+   * Hermes-safe: no named groups, no lookbehind.
+   */
+  private extractContratistaFallback(buffer: string): string | null {
+    const lines = buffer.split(/\n/);
+    for (const line of lines) {
+      const lower = line.toLowerCase();
+      // Match "contratista:", "empresa contratista:", "razón social:"
+      if (
+        lower.includes('contratista:') ||
+        lower.includes('empresa contratista:') ||
+        lower.includes('razon social:') ||
+        lower.includes('razón social:')
+      ) {
+        const colonIdx = line.indexOf(':');
+        if (colonIdx >= 0) {
+          const value = collapseLine(line.slice(colonIdx + 1));
+          if (value && !/JAVER/i.test(value)) return value;
+        }
+      }
+    }
+    return null;
   }
 
   /**

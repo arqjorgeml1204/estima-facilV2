@@ -185,22 +185,28 @@ export function isSeparadorViv(line: string): string | null {
 
 /**
  * Detects a paquete line. ONLY 1-2 digit numbers followed by " - " and a name.
+ * Name can contain accented chars, commas, periods, parentheses, numbers, etc.
  * Returns the full string "number - description" or null.
  */
 export function isPaquete(line: string): string | null {
-  const match = line.match(/^(\d{1,2})\s+-\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]+)$/i);
+  const match = line.match(/^(\d{1,2})\s+-\s+(.+)$/);
   if (!match) return null;
-  return `${match[1]} - ${collapseLine(match[2])}`;
+  const desc = match[2].trim();
+  if (!desc) return null;
+  return `${match[1]} - ${collapseLine(desc)}`;
 }
 
 /**
  * Detects a subpaquete line. ONLY 3+ digit numbers followed by " - " and a name.
+ * Name can contain accented chars, commas, periods, parentheses, numbers, etc.
  * Returns the full string or null.
  */
 export function isSubpaquete(line: string): string | null {
-  const match = line.match(/^(\d{3,})\s+-\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]+)$/i);
+  const match = line.match(/^(\d{3,})\s+-\s+(.+)$/);
   if (!match) return null;
-  return `${match[1]} - ${collapseLine(match[2])}`;
+  const desc = match[2].trim();
+  if (!desc) return null;
+  return `${match[1]} - ${collapseLine(desc)}`;
 }
 
 /**
