@@ -176,11 +176,11 @@ export function isPrototipo(line: string): string | null {
 }
 
 /**
- * Detects a vivienda separator line. Pattern: A01 - VIV.
+ * Detects a vivienda separator line. Pattern: A01 - VIV. / A01-VIV / A 01 - VIV.
  * Returns the group number ("01", "02") or null.
  */
 export function isSeparadorViv(line: string): string | null {
-  const match = line.match(/^A(\d{2})\s*-\s*VIV\./i);
+  const match = line.match(/^A\s*(\d{2})\s*[-–]\s*VIV/i);
   return match ? match[1] : null;
 }
 
@@ -212,23 +212,44 @@ export function isSubpaquete(line: string): string | null {
 
 /**
  * Parses an activity line into a ConceptoRaw.
- * Uses multi-space gaps as column separators.
+ * Primary: uses 2+ space gaps as column separator (pdfjs default).
+ * Fallback: uses 1+ space separator with right-anchored validation
+ * to recover lines where pdfjs collapses column gaps to single space.
  */
 export function parseLineaActividad(line: string): ConceptoRaw | null {
-  const match = line.match(
-    /^(\d+\.\d+\.\d+)\s+-\s+(.+?)\s{2,}([\d.]+)\s+([\w]{1,5})\s+([\d,.]+)\s+(\d+)\s+([\d,.]+)$/,
-  );
-  if (!match) return null;
-  const costoUnitario = parseFloat(match[5].replace(/,/g, ''));
-  const factor = parseInt(match[6], 10);
-  if (isNaN(costoUnitario) || isNaN(factor)) return null;
-  return {
-    codigoActividad: match[1],
-    descripcion: match[2].trim(),
-    unidad: match[4],
-    costoUnitario,
-    factor,
-  };
+  // Attempt 1: classic 2+ space column separator
+  const primary = /^(\d+\.\d+\.\d+)\s+-\s+(.+?)\s{2,}([\d.]+)\s+([\w]{1,6})\s+([\d,.]+)\s+(\d+)\s+([\d,.]+)$/.exec(line);
+  if (primary) {
+    const costoUnitario = parseFloat(primary[5].replace(/,/g, ''));
+    const factor = parseInt(primary[6], 10);
+    if (!isNaN(costoUnitario) && !isNaN(factor) && factor > 0) {
+      return {
+        codigoActividad: primary[1],
+        descripcion: primary[2].trim(),
+        unidad: primary[4],
+        costoUnitario,
+        factor,
+      };
+    }
+  }
+
+  // Attempt 2: fallback with 1+ space separator, validated by right-anchor sanity checks
+  const fallback = /^(\d+\.\d+\.\d+)\s+-\s+(.+?)\s+([\d.]+)\s+([\w]{1,6})\s+([\d,.]+)\s+(\d+)\s+([\d,.]+)$/.exec(line);
+  if (fallback) {
+    const costoUnitario = parseFloat(fallback[5].replace(/,/g, ''));
+    const factor = parseInt(fallback[6], 10);
+    if (!isNaN(costoUnitario) && costoUnitario > 0 && !isNaN(factor) && factor > 0 && factor <= 10000) {
+      return {
+        codigoActividad: fallback[1],
+        descripcion: fallback[2].trim(),
+        unidad: fallback[4],
+        costoUnitario,
+        factor,
+      };
+    }
+  }
+
+  return null;
 }
 
 /**
