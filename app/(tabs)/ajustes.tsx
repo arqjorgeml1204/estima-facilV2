@@ -278,51 +278,26 @@ export default function AjustesScreen() {
         {/* SUSCRIPCION */}
         <SectionTitle label="Suscripcion" />
         <Card>
-          <View style={{
-            flexDirection: 'row', alignItems: 'center',
-            justifyContent: 'space-between', marginBottom: 16,
-          }}>
-            <View>
-              <Text style={{
-                fontSize: 11, fontWeight: '700', color: '#434654',
-                textTransform: 'uppercase', letterSpacing: 1, marginBottom: 2,
-              }}>
-                Estado
-              </Text>
-              <Text style={{ fontSize: 14, color: '#004f11', fontWeight: '700' }}>Activa</Text>
-            </View>
-            <View style={{
-              backgroundColor: '#e7f7ea', borderRadius: 8,
-              paddingHorizontal: 10, paddingVertical: 4,
-            }}>
-              <Text style={{ fontSize: 11, color: '#004f11', fontWeight: '700' }}>PRO</Text>
-            </View>
-          </View>
-
-          <Text style={{ fontSize: 13, color: '#737685', marginBottom: 16 }}>
-            Valido hasta: 31/12/2026
-          </Text>
-
           <TouchableOpacity
-            onPress={() =>
-              Alert.alert(
-                'Canjear codigo',
-                'Ingresa tu codigo de activacion:',
-                [
-                  { text: 'Cancelar', style: 'cancel' },
-                  { text: 'Canjear', onPress: () => {} },
-                ]
-              )
-            }
+            onPress={() => router.push('/suscripcion')}
             style={{
-              borderWidth: 1.5, borderColor: '#003d9b', borderRadius: 8,
-              paddingVertical: 10, alignItems: 'center',
+              flexDirection: 'row', alignItems: 'center',
+              justifyContent: 'space-between', paddingVertical: 4,
             }}
-            activeOpacity={0.8}
+            activeOpacity={0.7}
           >
-            <Text style={{ fontSize: 13, fontWeight: '700', color: '#003d9b', textTransform: 'uppercase', letterSpacing: 1 }}>
-              Canjear Codigo
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <MaterialIcons name="vpn-key" size={20} color="#003d9b" />
+              <View>
+                <Text style={{ fontSize: 14, fontWeight: '600', color: '#191c1e' }}>
+                  Suscripcion / Canjear codigo
+                </Text>
+                <Text style={{ fontSize: 11, color: '#737685', marginTop: 2 }}>
+                  Ver estado, planes y activar codigo
+                </Text>
+              </View>
+            </View>
+            <MaterialIcons name="chevron-right" size={20} color="#c3c6d6" />
           </TouchableOpacity>
         </Card>
 

@@ -15,6 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 import { initDatabase, getProyectos, deleteProyecto, updateProyectoAlias } from '../../db/database';
 import { getCurrentUserId } from '../../utils/auth';
+import { hasActiveSubscription } from '../../utils/subscription';
 import ContractUploadModal from '../../components/ContractUploadModal';
 
 const STORAGE_KEY_FIRST_TIME = '@estimafacil:firstTime';
@@ -61,6 +62,19 @@ export default function ProyectosScreen() {
       const userId = await getCurrentUserId();
       const data = await getProyectos(userId);
       setProyectos(data as Proyecto[]);
+
+      // Verificar suscripcion (no bloquear — solo informar)
+      const active = await hasActiveSubscription();
+      if (!active) {
+        Alert.alert(
+          'Suscripcion requerida',
+          'Tu periodo de prueba ha vencido. Activa tu suscripcion para continuar usando EstimaFacil.',
+          [
+            { text: 'Activar ahora', onPress: () => router.push('/suscripcion') },
+            { text: 'Cerrar', style: 'cancel' },
+          ],
+        );
+      }
     } finally {
       setLoading(false);
     }

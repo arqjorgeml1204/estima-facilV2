@@ -12,6 +12,7 @@ import {
 import { useState } from 'react';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { activateTrial } from '../../utils/subscription';
 
 // TODO: Integrar con auth real cuando se implemente backend
 const STORAGE_KEY_LOGGED  = '@estimafacil:logged';
@@ -74,6 +75,7 @@ export default function RegisterScreen() {
       );
       await AsyncStorage.setItem(STORAGE_KEY_LOGGED, 'true');
       await AsyncStorage.setItem(STORAGE_KEY_USERID, userId);
+      await activateTrial();
       router.replace('/(tabs)');
     } catch (e) {
       setError('Error al crear la cuenta. Intenta de nuevo.');
