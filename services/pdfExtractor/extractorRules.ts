@@ -33,24 +33,25 @@ export function collapseLine(line: string): string {
 // ─── Header extraction ───────────────────────────────────────────────────────
 
 /**
- * Extract the contractor name.
- * New format: "Contratista <name> Fondo de garantía"
- * Fallback: old format "CONTRATISTA <name> APODERADO LEGAL"
+ * Extract the contractor name from the "Alcance detallado" section ONLY.
+ * New format: "Contratista <NAME_ON_SINGLE_LINE> Fondo de garantía"
+ * Fallback: old format "CONTRATISTA <NAME> APODERADO LEGAL" (single-line)
+ * Max 80 chars. Hermes-safe: no lookbehind, no named groups.
  */
 export function extractContratista(text: string): string | null {
-  // New format: between "Contratista" and "Fondo de garantía"
-  const newMatch = text.match(/Contratista\s+([\s\S]+?)\s+Fondo\s+de\s+garant[ií]a/i);
+  // New format: single-line match between "Contratista" and "Fondo de garantía"
+  const newMatch = text.match(/Contratista\s+([^\n]+?)\s+Fondo\s+de\s+garant[ií]a/i);
   if (newMatch) {
     const candidate = collapseLine(newMatch[1]);
-    if (candidate) return candidate;
+    if (candidate) return candidate.substring(0, 80);
   }
-  // Fallback: old format
-  const re = /CONTRATISTA\s+([\s\S]*?)APODERADO\s+LEGAL/gi;
+  // Fallback: old format — single line only (no [\s\S])
+  const re = /CONTRATISTA\s+([^\n]+?)APODERADO\s+LEGAL/gi;
   let match: RegExpExecArray | null;
   while ((match = re.exec(text)) !== null) {
     const candidate = collapseLine(match[1]);
     if (candidate && !/JAVER/i.test(candidate)) {
-      return candidate;
+      return candidate.substring(0, 80);
     }
   }
   return null;

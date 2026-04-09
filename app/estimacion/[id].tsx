@@ -751,7 +751,7 @@ export default function EstimacionGrid() {
                 <MaterialIcons name="swap-horiz" size={12} color="#003d9b" />
               </TouchableOpacity>
             </View>
-            <Text style={{ fontSize: 10, fontWeight: '600', color: '#737685', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            <Text style={{ fontSize: 10, fontWeight: '600', color: '#737685', textTransform: 'uppercase', letterSpacing: 0.5 }} numberOfLines={1} ellipsizeMode="tail">
               {proyecto?.nombre?.split('—')[1]?.trim() ?? proyecto?.nombre}
             </Text>
           </View>

@@ -318,15 +318,11 @@ export class PdfDeterministicExtractor {
    * document order established during line processing.
    */
   private buildResult(context: ParserContext): ContratoExtraido {
-    // Fallback: try header buffer for fields not found in alcance detallado
+    // Contratista: only from alcanceBuffer — no headerBuffer fallback
+    // (headerBuffer produces incorrect long text when carátula is present)
     let contratista = context.contratista;
     if (!contratista) {
-      contratista = extractContratista(context.headerBuffer);
-    }
-    // Last-resort contratista: scan alcance buffer for "CONTRATISTA:" or similar
-    if (!contratista) {
-      contratista = this.extractContratistaFallback(context.alcanceBuffer)
-        || this.extractContratistaFallback(context.headerBuffer);
+      contratista = this.extractContratistaFallback(context.alcanceBuffer);
     }
 
     let descripcionObra = context.descripcionObra;

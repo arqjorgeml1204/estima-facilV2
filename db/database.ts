@@ -121,7 +121,7 @@ export async function seedFromContract(
     [
       data.conjunto,
       data.numeroContrato,
-      `${data.conjunto} — ${data.contratista}`,
+      `${data.conjunto}${data.contratista ? ' — ' + data.contratista.substring(0, 50) : ''}`,
       data.descripcionObra ?? '',
       empresaId,
       desarrolladora.id,
