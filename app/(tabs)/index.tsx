@@ -135,6 +135,11 @@ export default function ProyectosScreen() {
           <Text style={{ fontSize: 13, fontWeight: '700', color: '#191c1e', lineHeight: 18 }}>
             {item.nombre}
           </Text>
+          {item.alias ? (
+            <Text style={{ fontSize: 11, color: '#003d9b', fontWeight: '600', marginTop: 2 }}>
+              {item.alias}
+            </Text>
+          ) : null}
           <Text style={{ fontSize: 11, color: '#737685', marginTop: 2 }}>
             {item.numero_contrato}
           </Text>

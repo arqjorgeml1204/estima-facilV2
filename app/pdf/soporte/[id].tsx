@@ -6,8 +6,9 @@
 
 import {
   View, Text, TouchableOpacity, ScrollView,
-  ActivityIndicator, SafeAreaView, Platform, Alert, TextInput,
+  ActivityIndicator, Platform, Alert, TextInput,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useEffect, useState, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -15,6 +16,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Asset } from 'expo-asset';
 import {
   initDatabase, getEstimacionById, getProyectoById,
   getDetallesByEstimacion, getEmpresa,
@@ -279,7 +281,18 @@ export default function PdfSoporte() {
   const fechaEst = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`;
 
   // ── buildHtml — replica FORMATO_ESTIMA_FACIL.xlsx ───────────────────────────
-  const buildHtml = () => {
+  const buildHtml = async () => {
+    // Cargar logo JAVER como base64
+    let logoSrc = '';
+    try {
+      const asset = Asset.fromModule(require('../../../assets/logo-javer.png'));
+      await asset.downloadAsync();
+      const logoBase64 = await FileSystem.readAsStringAsync(asset.localUri!, { encoding: 'base64' as any });
+      logoSrc = `data:image/png;base64,${logoBase64}`;
+    } catch (e) {
+      logoSrc = '';
+    }
+
     const montoContrato = proyecto?.monto_contrato ?? 0;
     const numEst = estimacion?.numero ?? 1;
     const numEstText = NUM_TEXT[numEst] ?? String(numEst);
@@ -299,7 +312,7 @@ export default function PdfSoporte() {
           <col style="width:12%"/><col style="width:6%"/><col style="width:6%"/><col style="width:24%"/>
         </colgroup>
         <tr style="height:20px">
-          <td rowspan="4" class="logo-cell">&nbsp;</td>
+          <td rowspan="4" style="width:120px; padding:4px; border:1px solid #ccc; text-align:center; vertical-align:middle;">${logoSrc ? `<img src="${logoSrc}" style="max-width:110px; max-height:50px; object-fit:contain;" />` : '<span style="font-size:14px; font-weight:bold; color:#003d9b;">JAVER</span>'}</td>
           <td class="hdr-title">DESARROLLO</td>
           <td class="hdr-title">FRENTE</td>
           <td class="hdr-title">CONJUNTO</td>
@@ -623,7 +636,7 @@ ${croquesPages}
   const handleExport = async () => {
     setExporting(true);
     try {
-      const html = buildHtml();
+      const html = await buildHtml();
       const { uri } = await Print.printToFileAsync({
         html,
         base64: false,
@@ -663,7 +676,7 @@ ${croquesPages}
     setExporting(true);
     try {
       await Print.printAsync({
-        html: buildHtml(),
+        html: await buildHtml(),
         width: PAGE_WIDTH,
         height: PAGE_HEIGHT,
       });
@@ -688,25 +701,22 @@ ${croquesPages}
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
-      {/* Header */}
-      <View style={{
-        flexDirection: 'row', alignItems: 'center', gap: 12,
-        paddingHorizontal: 16, paddingVertical: 14,
-        borderBottomWidth: 1, borderBottomColor: '#e1e2e4',
-        backgroundColor: '#f8f9fb',
-      }}>
-        <TouchableOpacity onPress={() => router.back()} activeOpacity={0.7}>
-          <MaterialIcons name="arrow-back" size={22} color="#003d9b" />
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
+      {/* Header — Fila 1: flecha + título + conjunto */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, borderBottomWidth: 0 }}>
+        <TouchableOpacity onPress={() => router.back()} style={{ marginRight: 12 }}>
+          <MaterialIcons name="arrow-back" size={22} color="#191c1e" />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 16, fontWeight: '800', color: '#191c1e', letterSpacing: -0.3 }}>
-            Soporte de Estimación
-          </Text>
-          <Text style={{ fontSize: 10, color: '#737685', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-            {proyecto.codigo} · Est. #{estimacion.numero}
-          </Text>
+          <Text style={{ fontSize: 17, fontWeight: '800', color: '#191c1e' }}>Soporte de Estimación</Text>
+          <Text style={{ fontSize: 12, color: '#737685', marginTop: 1 }}>{proyecto?.conjunto ?? ''}</Text>
         </View>
+      </View>
+      {/* Header — Fila 2: botones */}
+      <View style={{
+        flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingBottom: 12,
+        borderBottomWidth: 1, borderBottomColor: '#e1e2e4',
+      }}>
         <TouchableOpacity
           onPress={handlePrint}
           activeOpacity={0.8}

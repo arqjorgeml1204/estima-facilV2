@@ -12,10 +12,11 @@
  */
 
 import {
-  View, Text, TouchableOpacity, ScrollView, SafeAreaView,
+  View, Text, TouchableOpacity, ScrollView,
   ActivityIndicator, Modal, TextInput, Alert,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -701,7 +702,7 @@ export default function EstimacionGrid() {
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
 
       {/* ── Banner Modo Actualización ── */}
       {modoActualizacion && !isViewMode && (

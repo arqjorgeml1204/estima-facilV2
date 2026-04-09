@@ -5,8 +5,9 @@
 
 import {
   View, Text, TouchableOpacity, FlatList,
-  ActivityIndicator, SafeAreaView, ScrollView, Alert,
+  ActivityIndicator, ScrollView, Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useEffect, useState, useCallback } from 'react';
 import { useFocusEffect } from 'expo-router';
@@ -158,7 +159,7 @@ export default function ProyectoDashboard() {
     : 0;
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
+    <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
       {/* Header */}
       <View style={{
         flexDirection: 'row', alignItems: 'center', gap: 12,
