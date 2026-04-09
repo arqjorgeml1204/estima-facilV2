@@ -16,12 +16,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // TODO: Integrar con auth real cuando se implemente backend
 const STORAGE_KEY_LOGGED  = '@estimafacil:logged';
 const STORAGE_KEY_SESSION = 'user_session';
+const STORAGE_KEY_USERID  = '@estimafacil:user_id';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function RegisterScreen() {
   const [nombre, setNombre]               = useState('');
   const [email, setEmail]                 = useState('');
+  const [phone, setPhone]                 = useState('');
+  const [usePhone, setUsePhone]           = useState(false);
   const [password, setPassword]           = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword]   = useState(false);
@@ -37,27 +40,40 @@ export default function RegisterScreen() {
       setError('Ingresa tu nombre completo.');
       return;
     }
-    if (!EMAIL_REGEX.test(email.trim())) {
-      setError('Correo electrónico inválido.');
-      return;
+    if (usePhone) {
+      const digits = phone.trim().replace(/[^0-9]/g, '');
+      if (digits.length < 10) {
+        setError('Telefono invalido. Minimo 10 digitos.');
+        return;
+      }
+    } else {
+      if (!EMAIL_REGEX.test(email.trim())) {
+        setError('Correo electronico invalido.');
+        return;
+      }
     }
     if (password.length < 8) {
-      setError('La contraseña debe tener al menos 8 caracteres.');
+      setError('La contrasena debe tener al menos 8 caracteres.');
       return;
     }
     if (password !== confirmPassword) {
-      setError('Las contraseñas no coinciden.');
+      setError('Las contrasenas no coinciden.');
       return;
     }
 
     setLoading(true);
     try {
+      const userId = usePhone
+        ? `tel:${phone.trim().replace(/[^0-9]/g, '')}`
+        : email.trim().toLowerCase();
+
       // TODO: reemplazar con registro real en backend
       await AsyncStorage.setItem(
         STORAGE_KEY_SESSION,
-        JSON.stringify({ nombre: nombre.trim(), email: email.trim() }),
+        JSON.stringify({ nombre: nombre.trim(), email: usePhone ? '' : email.trim(), phone: usePhone ? phone.trim() : '' }),
       );
       await AsyncStorage.setItem(STORAGE_KEY_LOGGED, 'true');
+      await AsyncStorage.setItem(STORAGE_KEY_USERID, userId);
       router.replace('/(tabs)');
     } catch (e) {
       setError('Error al crear la cuenta. Intenta de nuevo.');
@@ -123,20 +139,71 @@ export default function RegisterScreen() {
             />
           </View>
 
-          {/* Correo electrónico */}
-          <View>
-            <Text style={labelStyle}>Correo electrónico</Text>
-            <TextInput
-              value={email}
-              onChangeText={setEmail}
-              placeholder="correo@empresa.com"
-              placeholderTextColor="#c3c6d6"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoComplete="email"
-              style={inputStyle}
-            />
+          {/* Toggle Correo / Telefono */}
+          <View style={{ flexDirection: 'row', borderRadius: 8, overflow: 'hidden', borderWidth: 1.5, borderColor: '#003d9b' }}>
+            <TouchableOpacity
+              onPress={() => setUsePhone(false)}
+              style={{
+                flex: 1, paddingVertical: 10, alignItems: 'center',
+                backgroundColor: !usePhone ? '#003d9b' : 'transparent',
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={{
+                fontSize: 13, fontWeight: '700',
+                color: !usePhone ? '#ffffff' : '#003d9b',
+                fontFamily: 'Inter',
+              }}>
+                Email
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setUsePhone(true)}
+              style={{
+                flex: 1, paddingVertical: 10, alignItems: 'center',
+                backgroundColor: usePhone ? '#003d9b' : 'transparent',
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={{
+                fontSize: 13, fontWeight: '700',
+                color: usePhone ? '#ffffff' : '#003d9b',
+                fontFamily: 'Inter',
+              }}>
+                Telefono
+              </Text>
+            </TouchableOpacity>
           </View>
+
+          {/* Correo electronico o Telefono */}
+          {usePhone ? (
+            <View>
+              <Text style={labelStyle}>Telefono</Text>
+              <TextInput
+                value={phone}
+                onChangeText={setPhone}
+                placeholder="5512345678"
+                placeholderTextColor="#c3c6d6"
+                keyboardType="phone-pad"
+                autoCapitalize="none"
+                style={inputStyle}
+              />
+            </View>
+          ) : (
+            <View>
+              <Text style={labelStyle}>Correo electronico</Text>
+              <TextInput
+                value={email}
+                onChangeText={setEmail}
+                placeholder="correo@empresa.com"
+                placeholderTextColor="#c3c6d6"
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoComplete="email"
+                style={inputStyle}
+              />
+            </View>
+          )}
 
           {/* Contraseña */}
           <View>

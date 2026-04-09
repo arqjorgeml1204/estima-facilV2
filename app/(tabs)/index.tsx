@@ -14,6 +14,7 @@ import { router, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 import { initDatabase, getProyectos, deleteProyecto, updateProyectoAlias } from '../../db/database';
+import { getCurrentUserId } from '../../utils/auth';
 import ContractUploadModal from '../../components/ContractUploadModal';
 
 const STORAGE_KEY_FIRST_TIME = '@estimafacil:firstTime';
@@ -57,7 +58,8 @@ export default function ProyectosScreen() {
   const loadProyectos = async () => {
     setLoading(true);
     try {
-      const data = await getProyectos();
+      const userId = await getCurrentUserId();
+      const data = await getProyectos(userId);
       setProyectos(data as Proyecto[]);
     } finally {
       setLoading(false);

@@ -17,9 +17,10 @@ import { initDatabase } from '../../db/database';
 const STORAGE_KEY_EMAIL    = '@estimafacil:email';
 const STORAGE_KEY_REMEMBER = '@estimafacil:remember';
 const STORAGE_KEY_LOGGED   = '@estimafacil:logged';
+const STORAGE_KEY_USERID   = '@estimafacil:user_id';
 
 export default function LoginScreen() {
-  const [email, setEmail]             = useState('');
+  const [emailOrPhone, setEmailOrPhone] = useState('');
   const [password, setPassword]       = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [remember, setRemember]       = useState(false);
@@ -35,7 +36,7 @@ export default function LoginScreen() {
         const remembered = await AsyncStorage.getItem(STORAGE_KEY_REMEMBER);
         if (remembered === 'true') {
           const savedEmail = await AsyncStorage.getItem(STORAGE_KEY_EMAIL);
-          if (savedEmail) setEmail(savedEmail);
+          if (savedEmail) setEmailOrPhone(savedEmail);
           const logged = await AsyncStorage.getItem(STORAGE_KEY_LOGGED);
           if (logged === 'true') {
             router.replace('/(tabs)');
@@ -52,40 +53,58 @@ export default function LoginScreen() {
 
   // ── Login ──────────────────────────────────────────────────────────────────
   const handleLogin = async () => {
-    if (!email.trim() || !password.trim()) {
-      setError('Ingresa tu correo y contraseña.');
+    const input = emailOrPhone.trim();
+    if (!input || !password.trim()) {
+      setError('Ingresa tu correo/telefono y contrasena.');
       return;
     }
     setError('');
     setLoading(true);
 
     try {
-      // TODO: reemplazar con autenticación real cuando se implemente backend
-      // Por ahora: cualquier email+password válido accede (MVP local)
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
-        setError('Correo electrónico inválido.');
-        setLoading(false);
-        return;
+      // Detectar si es email o telefono
+      const isEmail = input.indexOf('@') >= 0;
+      if (isEmail) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(input)) {
+          setError('Correo electronico invalido.');
+          setLoading(false);
+          return;
+        }
+      } else {
+        // Telefono: solo digitos, minimo 10
+        const digits = input.replace(/[^0-9]/g, '');
+        if (digits.length < 10) {
+          setError('Telefono invalido. Minimo 10 digitos.');
+          setLoading(false);
+          return;
+        }
       }
+
       if (password.length < 6) {
-        setError('La contraseña debe tener al menos 6 caracteres.');
+        setError('La contrasena debe tener al menos 6 caracteres.');
         setLoading(false);
         return;
       }
 
+      // Generar user_id segun tipo
+      const userId = isEmail
+        ? input.toLowerCase()
+        : `tel:${input.replace(/[^0-9]/g, '')}`;
+
       if (remember) {
-        await AsyncStorage.setItem(STORAGE_KEY_EMAIL, email.trim());
+        await AsyncStorage.setItem(STORAGE_KEY_EMAIL, input);
         await AsyncStorage.setItem(STORAGE_KEY_REMEMBER, 'true');
       } else {
         await AsyncStorage.removeItem(STORAGE_KEY_EMAIL);
         await AsyncStorage.setItem(STORAGE_KEY_REMEMBER, 'false');
       }
       await AsyncStorage.setItem(STORAGE_KEY_LOGGED, 'true');
+      await AsyncStorage.setItem(STORAGE_KEY_USERID, userId);
 
       router.replace('/(tabs)');
     } catch (e) {
-      setError('Error al iniciar sesión. Intenta de nuevo.');
+      setError('Error al iniciar sesion. Intenta de nuevo.');
     } finally {
       setLoading(false);
     }
@@ -139,19 +158,19 @@ export default function LoginScreen() {
 
         {/* Campos */}
         <View style={{ gap: 12 }}>
-          {/* Email */}
+          {/* Email o Telefono */}
           <View>
             <Text style={{
               fontSize: 11, fontWeight: '700', color: '#434654',
               textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6,
               fontFamily: 'Inter',
             }}>
-              Correo electrónico
+              Correo o telefono
             </Text>
             <TextInput
-              value={email}
-              onChangeText={setEmail}
-              placeholder="correo@empresa.com"
+              value={emailOrPhone}
+              onChangeText={setEmailOrPhone}
+              placeholder="correo@empresa.com o 5512345678"
               placeholderTextColor="#c3c6d6"
               keyboardType="email-address"
               autoCapitalize="none"

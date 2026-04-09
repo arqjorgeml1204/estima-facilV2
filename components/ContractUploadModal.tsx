@@ -12,6 +12,7 @@ import { useState, useRef, useEffect } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
 import { PdfDeterministicExtractor, ContratoExtraido } from '../services/pdfExtractor';
 import { seedFromContract, getEmpresa, upsertEmpresa } from '../db/database';
+import { getCurrentUserId } from '../utils/auth';
 import PdfWebViewBridge, { PdfBridgeRef } from '../services/pdfExtractor/PdfWebViewBridge';
 
 // ── Pasos del flujo ────────────────────────────────────────────────────────────
@@ -81,13 +82,14 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
     if (!contrato) return;
     setStep('saving');
     try {
-      let empresa = await getEmpresa();
+      const userId = await getCurrentUserId();
+      let empresa = await getEmpresa(userId);
       if (!empresa) {
-        await upsertEmpresa('Mi Empresa');
-        empresa = await getEmpresa();
+        await upsertEmpresa('Mi Empresa', undefined, undefined, userId);
+        empresa = await getEmpresa(userId);
       }
       const empresaId = empresa!.id;
-      const proyectoId = await seedFromContract(contrato, empresaId);
+      const proyectoId = await seedFromContract(contrato, empresaId, userId);
       setStep('done');
       setTimeout(() => onComplete(proyectoId), 800);
     } catch (e: any) {

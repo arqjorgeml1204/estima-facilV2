@@ -13,6 +13,7 @@ import { useState, useEffect, useRef } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
+import { getCurrentUserId } from '../../utils/auth';
 
 export default function AjustesScreen() {
   const router = useRouter();
@@ -24,6 +25,7 @@ export default function AjustesScreen() {
   const [initialObra,   setInitialObra]   = useState('VISTAS DEL NEVADO');
   const [initialFrente, setInitialFrente] = useState('FRENTE 01');
 
+  const [userAccount, setUserAccount] = useState('');
   const [editingPassword, setEditingPassword] = useState(false);
   const [showCurrentPass, setShowCurrentPass] = useState(false);
   const [showNewPass,     setShowNewPass]     = useState(false);
@@ -38,6 +40,8 @@ export default function AjustesScreen() {
       const frente = await AsyncStorage.getItem('frente');
       if (obra)   { setInitialObra(obra);     obraRef.current   = obra; }
       if (frente) { setInitialFrente(frente); frenteRef.current = frente; }
+      const userId = await getCurrentUserId();
+      setUserAccount(userId === 'default' ? 'Sin cuenta' : userId);
     })();
   }, []);
 
@@ -193,7 +197,7 @@ export default function AjustesScreen() {
               paddingHorizontal: 14, paddingVertical: 12,
             }}>
               <Text style={{ fontSize: 14, color: '#737685' }}>
-                usuario@email.com
+                {userAccount || 'Cargando...'}
               </Text>
             </View>
           </View>
@@ -256,6 +260,7 @@ export default function AjustesScreen() {
               await AsyncStorage.multiRemove([
                 '@estimafacil:logged', '@estimafacil:email',
                 '@estimafacil:remember', '@estimafacil:firstTime',
+                '@estimafacil:user_id',
                 'obra', 'frente',
               ]);
               router.replace('/(auth)/login');

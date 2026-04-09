@@ -43,6 +43,13 @@ export async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
       try {
         await database.execAsync(`ALTER TABLE proyecto ADD COLUMN fondo_garantia REAL DEFAULT 0`);
       } catch (_) {}
+      // Multi-cuenta: user_id en proyecto y empresa
+      try {
+        await database.execAsync(`ALTER TABLE proyecto ADD COLUMN user_id TEXT DEFAULT ''`);
+      } catch (_) {}
+      try {
+        await database.execAsync(`ALTER TABLE empresa ADD COLUMN user_id TEXT DEFAULT ''`);
+      } catch (_) {}
       db = database;
       return database;
     })();
@@ -57,26 +64,33 @@ export function getDb(): SQLite.SQLiteDatabase {
 
 // ─── Empresa ──────────────────────────────────────────────────────────────────
 
-export async function getEmpresa() {
+export async function getEmpresa(userId?: string) {
   const database = getDb();
+  if (userId && userId !== 'default') {
+    const emp = await database.getFirstAsync<{ id: number; nombre: string; rfc: string; logo_uri: string }>(
+      'SELECT * FROM empresa WHERE user_id=? LIMIT 1', [userId]
+    );
+    if (emp) return emp;
+  }
+  // backwards compat: si no hay empresa con user_id, retornar cualquiera
   return database.getFirstAsync<{ id: number; nombre: string; rfc: string; logo_uri: string }>(
     'SELECT * FROM empresa LIMIT 1'
   );
 }
 
-export async function upsertEmpresa(nombre: string, rfc?: string, logoUri?: string) {
+export async function upsertEmpresa(nombre: string, rfc?: string, logoUri?: string, userId?: string) {
   const database = getDb();
-  const existing = await getEmpresa();
+  const existing = await getEmpresa(userId);
   if (existing) {
     await database.runAsync(
-      'UPDATE empresa SET nombre=?, rfc=?, logo_uri=? WHERE id=?',
-      [nombre, rfc ?? null, logoUri ?? null, existing.id]
+      'UPDATE empresa SET nombre=?, rfc=?, logo_uri=?, user_id=? WHERE id=?',
+      [nombre, rfc ?? null, logoUri ?? null, userId ?? '', existing.id]
     );
     return existing.id;
   }
   const result = await database.runAsync(
-    'INSERT INTO empresa (nombre, rfc, logo_uri) VALUES (?,?,?)',
-    [nombre, rfc ?? null, logoUri ?? null]
+    'INSERT INTO empresa (nombre, rfc, logo_uri, user_id) VALUES (?,?,?,?)',
+    [nombre, rfc ?? null, logoUri ?? null, userId ?? '']
   );
   return result.lastInsertRowId;
 }
@@ -90,6 +104,7 @@ export async function upsertEmpresa(nombre: string, rfc?: string, logoUri?: stri
 export async function seedFromContract(
   data: ContratoExtraido,
   empresaId: number,
+  userId: string = '',
   desarrolladoraNombre: string = 'CASAS JAVER DE MEXICO S.A. DE C.V.'
 ): Promise<number> {
   const database = getDb();
@@ -116,8 +131,8 @@ export async function seedFromContract(
       empresa_id, desarrolladora_id,
       frente, conjunto, monto_contrato,
       total_unidades, factor_por_seccion, prototipo,
-      fecha_inicio, fecha_terminacion, fondo_garantia
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      fecha_inicio, fecha_terminacion, fondo_garantia, user_id
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       data.conjunto,
       data.numeroContrato,
@@ -134,6 +149,7 @@ export async function seedFromContract(
       '',  // fechaInicio — not extracted
       '',  // fechaTerminacion — not extracted
       data.fondoGarantia ?? 0,
+      userId,
     ]
   );
   const proyectoId = proyectoResult.lastInsertRowId;
@@ -169,13 +185,21 @@ export async function seedFromContract(
 
 // ─── Proyectos ────────────────────────────────────────────────────────────────
 
-export async function getProyectos() {
+export async function getProyectos(userId?: string) {
   const database = getDb();
+  // Si userId es vacio o 'default', mostrar todos (backwards compat para usuarios existentes)
+  if (!userId || userId === 'default') {
+    return database.getAllAsync<{
+      id: number; codigo: string; numero_contrato: string;
+      nombre: string; monto_contrato: number;
+      semana_actual: number; numero_estimacion_actual: number;
+    }>('SELECT * FROM proyecto ORDER BY created_at DESC');
+  }
   return database.getAllAsync<{
     id: number; codigo: string; numero_contrato: string;
     nombre: string; monto_contrato: number;
     semana_actual: number; numero_estimacion_actual: number;
-  }>('SELECT * FROM proyecto ORDER BY created_at DESC');
+  }>('SELECT * FROM proyecto WHERE user_id=? OR user_id=\'\' ORDER BY created_at DESC', [userId]);
 }
 
 export async function getProyectoById(id: number) {
