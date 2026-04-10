@@ -5,9 +5,10 @@
 
 import {
   View, Text, TouchableOpacity, FlatList,
-  Image, ActivityIndicator, SafeAreaView,
+  Image, ActivityIndicator,
   Alert, TextInput, Modal, Platform, ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useEffect, useState, useCallback } from 'react';
 import { useFocusEffect } from 'expo-router';
@@ -345,6 +346,24 @@ export default function CroquisScreen() {
           <View style={{ height: 24 }} />
         </ScrollView>
       )}
+
+      {/* Navigation buttons */}
+      <View style={{ flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: 1, borderTopColor: '#e5e7eb' }}>
+        <TouchableOpacity
+          onPress={() => router.push(`/evidencia/${id}`)}
+          activeOpacity={0.8}
+          style={{ flex: 1, borderWidth: 1.5, borderColor: '#003d9b', borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginRight: 6 }}
+        >
+          <Text style={{ color: '#003d9b', fontWeight: '700', fontSize: 14 }}>EVIDENCIA</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => router.push(`/pdf/soporte/${id}`)}
+          activeOpacity={0.8}
+          style={{ flex: 1, backgroundColor: '#003d9b', borderRadius: 8, paddingVertical: 12, alignItems: 'center', marginLeft: 6 }}
+        >
+          <Text style={{ color: '#fff', fontWeight: '700', fontSize: 14 }}>CONTINUAR →</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Add modal */}
       <Modal visible={showModal} animationType="slide" transparent>
