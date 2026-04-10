@@ -239,6 +239,7 @@ export default function PdfSoporte() {
   })();
 
   // Aplicar overrides manuales y calcular derivados (#16: cap estaEst a factor)
+  // BUG-1: Filtrar conceptos con importe del periodo actual = $0
   const computedRows: ComputedRow[] = groupedRows.map(g => {
     const rawEstaEst = editedEstaEst[g.actividad] !== undefined
       ? parseFloat(editedEstaEst[g.actividad]) || 0
@@ -254,7 +255,7 @@ export default function PdfSoporte() {
       ? (importeAcum / importeContrato) * 100
       : 0;
     return { ...g, estaEst, acum, importeContrato, importeAnt, importeEstaEst, importeAcum, avance };
-  });
+  }).filter(r => r.importeEstaEst > 0);
 
   // Totales locales recalculados en tiempo real (#15: retención editable)
   const localSubtotal = computedRows.reduce((s, r) => s + r.importeEstaEst, 0);

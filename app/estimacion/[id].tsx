@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router } from 'expo-router';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -91,6 +91,149 @@ const emptyDetalle = (conceptoId: number): Detalle => ({
   importe_esta_est: 0,
   avance_financiero: 0,
   cell_state: 'empty',
+});
+
+// ─── BUG-3: Shared styles (defined outside render to preserve referential equality) ──
+
+const ROW_HEIGHT = 60;
+const rowStyleEven = { flexDirection: 'row' as const, backgroundColor: '#ffffff', borderBottomWidth: 1, borderBottomColor: 'rgba(195,198,214,0.08)' };
+const rowStyleOdd = { flexDirection: 'row' as const, backgroundColor: 'rgba(248,249,251,0.8)', borderBottomWidth: 1, borderBottomColor: 'rgba(195,198,214,0.08)' };
+const conceptColStyle = { padding: 10, borderRightWidth: 1, borderRightColor: 'rgba(195,198,214,0.1)', justifyContent: 'center' as const };
+const cellOuterStyle = { padding: 4, alignItems: 'center' as const, justifyContent: 'center' as const };
+const cellInnerBase = { borderRadius: 4, alignItems: 'center' as const, justifyContent: 'center' as const };
+
+// ─── BUG-3: Memoized ConceptoRow ──────────────────────────────────────────────
+
+interface ConceptoRowProps {
+  concepto: Concepto;
+  detalle: Detalle | undefined;
+  priorLocked: number;
+  priorSemana: number;
+  isEvenRow: boolean;
+  colCount: number;
+  cellW: number;
+  colW: number;
+  modoActualizacion: boolean;
+  isViewMode: boolean;
+  currentWeek: number;
+  onCellTap: (concepto: Concepto, colIdx: number) => void;
+  onLongPress: (concepto: Concepto) => void;
+  onMarcarTodo: (concepto: Concepto) => void;
+  onDesmarcarTodo: (concepto: Concepto) => void;
+}
+
+const ConceptoRow = React.memo(function ConceptoRow({
+  concepto, detalle, priorLocked, priorSemana, isEvenRow,
+  colCount, cellW, colW, modoActualizacion, isViewMode, currentWeek,
+  onCellTap, onLongPress, onMarcarTodo, onDesmarcarTodo,
+}: ConceptoRowProps) {
+  const modeActAdditions = detalle?.cantidad_anterior ?? 0;
+  const effectiveAnterior = priorLocked + modeActAdditions;
+  const cantEsta = detalle?.cantidad_esta_est ?? 0;
+  const isFullyBlocked = effectiveAnterior >= concepto.factor;
+
+  const getCellVisual = (colIdx: number): { bg: string; text: string | null; blocked: boolean; badgeText: string | null } => {
+    if (colIdx < priorLocked) {
+      return { bg: '#1A7A3C', text: null, blocked: true, badgeText: priorSemana > 0 ? `S.${priorSemana}` : null };
+    }
+    if (colIdx < effectiveAnterior) {
+      if (modoActualizacion) {
+        return { bg: '#2196F3', text: null, blocked: false, badgeText: null };
+      }
+      return { bg: '#1A7A3C', text: null, blocked: true, badgeText: null };
+    }
+    if (colIdx < effectiveAnterior + cantEsta) {
+      return { bg: '#4CAF50', text: String(currentWeek), blocked: modoActualizacion, badgeText: null };
+    }
+    return { bg: '#E0E0E0', text: null, blocked: false, badgeText: null };
+  };
+
+  const getUpdateCounter = (): string => {
+    const available = concepto.factor - priorLocked - cantEsta;
+    return `${modeActAdditions}/${available}`;
+  };
+
+  return (
+    <View style={isEvenRow ? rowStyleEven : rowStyleOdd}>
+      {/* Columna concepto (fija) */}
+      <View style={[conceptColStyle, { width: colW }]}>
+        {/* Modo Actualizacion controles */}
+        {modoActualizacion && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+            <View style={{ flexDirection: 'row', gap: 4 }}>
+              <TouchableOpacity
+                onPress={() => onMarcarTodo(concepto)}
+                style={{ borderWidth: 1, borderColor: '#2196F3', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 }}
+              >
+                <Text style={{ fontSize: 8, fontWeight: '700', color: '#2196F3', textTransform: 'uppercase' }}>Marcar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => onDesmarcarTodo(concepto)}
+                style={{ borderWidth: 1, borderColor: '#D32F2F', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 }}
+              >
+                <Text style={{ fontSize: 8, fontWeight: '700', color: '#D32F2F', textTransform: 'uppercase' }}>Desmarcar</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={{ fontSize: 9, fontWeight: '700', color: '#2196F3' }}>{getUpdateCounter()}</Text>
+          </View>
+        )}
+        <Text style={{ fontSize: 11, fontWeight: '700', color: '#191c1e', lineHeight: 15 }} numberOfLines={2}>
+          {concepto.descripcion}
+        </Text>
+        <Text style={{ fontSize: 9, fontWeight: '600', color: '#003d9b', marginTop: 2 }}>
+          ${concepto.costo_unitario.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+        </Text>
+        {priorLocked > 0 && !modoActualizacion && (
+          <Text style={{ fontSize: 8, fontWeight: '600', color: '#737685', marginTop: 1 }}>
+            ({priorLocked} EST. PREV)
+          </Text>
+        )}
+        {isFullyBlocked && !modoActualizacion && (
+          <View style={{ backgroundColor: '#1A7A3C', borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1, marginTop: 2, alignSelf: 'flex-start' }}>
+            <Text style={{ color: '#ffffff', fontSize: 7, fontWeight: '800' }}>COMPL.</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Celdas interactivas */}
+      {Array.from({ length: colCount }, (_, colIdx) => {
+        const { bg, text, blocked, badgeText } = getCellVisual(colIdx);
+        return (
+          <TouchableOpacity
+            key={colIdx}
+            style={[cellOuterStyle, { width: cellW }]}
+            onPress={() => onCellTap(concepto, colIdx)}
+            onLongPress={() => onLongPress(concepto)}
+            delayLongPress={500}
+            activeOpacity={blocked ? 1 : 0.7}
+          >
+            <View style={[cellInnerBase, { width: cellW - 8, aspectRatio: 1, backgroundColor: bg }]}>
+              {text !== null && (
+                <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>{text}</Text>
+              )}
+              {badgeText !== null && (
+                <View style={{ position: 'absolute', top: 1, right: 1, backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 2, paddingHorizontal: 2, paddingVertical: 0.5 }}>
+                  <Text style={{ color: '#ffffff', fontSize: 6, fontWeight: '700' }}>{badgeText}</Text>
+                </View>
+              )}
+            </View>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}, (prev, next) => {
+  // Only re-render if this row's relevant data changed
+  return (
+    prev.detalle === next.detalle &&
+    prev.priorLocked === next.priorLocked &&
+    prev.priorSemana === next.priorSemana &&
+    prev.concepto.id === next.concepto.id &&
+    prev.modoActualizacion === next.modoActualizacion &&
+    prev.isViewMode === next.isViewMode &&
+    prev.isEvenRow === next.isEvenRow &&
+    prev.colCount === next.colCount
+  );
 });
 
 // ─── Input Manual Modal ────────────────────────────────────────────────────────
@@ -187,11 +330,10 @@ function SummaryModal({
   }, [visible]);
 
   const activeConceptos = conceptos.filter(c => {
-    const priorLocked = priorData[c.id]?.cantidad ?? 0;
     const det = detalles[c.id];
-    const modeActAdditions = det?.cantidad_anterior ?? 0;
     const cantEsta = det?.cantidad_esta_est ?? 0;
-    return (priorLocked + modeActAdditions) > 0 || cantEsta > 0;
+    // BUG-1: Solo mostrar conceptos con importe del periodo actual > 0
+    return cantEsta * c.costo_unitario > 0;
   });
 
   const handleConfirm = () => {
@@ -659,48 +801,6 @@ export default function EstimacionGrid() {
     paquetes[paquetes.length - 1].conceptos.push(c);
   }
 
-  // ── Helper: cell visual (Issues #1, #2, #5) ─────────────────────────────────
-  const getCellVisual = (
-    concepto: Concepto,
-    colIdx: number,
-  ): { bg: string; text: string | null; blocked: boolean; badgeText: string | null } => {
-    const priorLocked = priorData[concepto.id]?.cantidad ?? 0;
-    const priorSemana = priorData[concepto.id]?.semana ?? 0;
-    const modeActAdditions = detalles[concepto.id]?.cantidad_anterior ?? 0;
-    const effectiveAnterior = priorLocked + modeActAdditions;
-    const cantEsta = detalles[concepto.id]?.cantidad_esta_est ?? 0;
-
-    // Prior locked cells (from other estimaciones) — Issue #1
-    if (colIdx < priorLocked) {
-      return { bg: '#1A7A3C', text: null, blocked: true, badgeText: priorSemana > 0 ? `S.${priorSemana}` : null };
-    }
-
-    // Mode actualización anterior cells
-    if (colIdx < effectiveAnterior) {
-      if (modoActualizacion) {
-        return { bg: '#2196F3', text: null, blocked: false, badgeText: null };
-      }
-      return { bg: '#1A7A3C', text: null, blocked: true, badgeText: null };
-    }
-
-    // Current cells
-    if (colIdx < effectiveAnterior + cantEsta) {
-      return { bg: '#4CAF50', text: String(currentWeek), blocked: modoActualizacion, badgeText: null };
-    }
-
-    // Empty
-    return { bg: '#E0E0E0', text: null, blocked: false, badgeText: null };
-  };
-
-  // ── Update counter (mode actualización) ──────────────────────────────────────
-  const getUpdateCounter = (concepto: Concepto): string => {
-    const priorLocked = priorData[concepto.id]?.cantidad ?? 0;
-    const modeActAdditions = detalles[concepto.id]?.cantidad_anterior ?? 0;
-    const cantEsta = detalles[concepto.id]?.cantidad_esta_est ?? 0;
-    const available = concepto.factor - priorLocked - cantEsta;
-    return `${modeActAdditions}/${available}`;
-  };
-
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
 
@@ -959,136 +1059,26 @@ export default function EstimacionGrid() {
                     </Text>
                   </View>
 
-                  {paq.conceptos.map((concepto, idx) => {
-                    const det = detalles[concepto.id];
-                    const priorLocked = priorData[concepto.id]?.cantidad ?? 0;
-                    const modeActAdditions = det?.cantidad_anterior ?? 0;
-                    const effectiveAnterior = priorLocked + modeActAdditions;
-                    const cantEsta = det?.cantidad_esta_est ?? 0;
-                    const isEvenRow = idx % 2 === 0;
-                    const isFullyBlocked = effectiveAnterior >= concepto.factor;
-
-                    return (
-                      <View
-                        key={concepto.id}
-                        style={{
-                          flexDirection: 'row',
-                          backgroundColor: isEvenRow ? '#ffffff' : 'rgba(248,249,251,0.8)',
-                          borderBottomWidth: 1, borderBottomColor: 'rgba(195,198,214,0.08)',
-                        }}
-                      >
-                        {/* Columna concepto (fija) */}
-                        <View style={{
-                          width: COL_W, padding: 10,
-                          borderRightWidth: 1, borderRightColor: 'rgba(195,198,214,0.1)',
-                          justifyContent: 'center',
-                        }}>
-                          {/* Modo Actualización — controles */}
-                          {modoActualizacion && (
-                            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-                              <View style={{ flexDirection: 'row', gap: 4 }}>
-                                <TouchableOpacity
-                                  onPress={() => handleMarcarTodo(concepto)}
-                                  style={{
-                                    borderWidth: 1, borderColor: '#2196F3', borderRadius: 4,
-                                    paddingHorizontal: 6, paddingVertical: 2,
-                                  }}
-                                >
-                                  <Text style={{ fontSize: 8, fontWeight: '700', color: '#2196F3', textTransform: 'uppercase' }}>
-                                    Marcar
-                                  </Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                  onPress={() => handleDesmarcarTodo(concepto)}
-                                  style={{
-                                    borderWidth: 1, borderColor: '#D32F2F', borderRadius: 4,
-                                    paddingHorizontal: 6, paddingVertical: 2,
-                                  }}
-                                >
-                                  <Text style={{ fontSize: 8, fontWeight: '700', color: '#D32F2F', textTransform: 'uppercase' }}>
-                                    Desmarcar
-                                  </Text>
-                                </TouchableOpacity>
-                              </View>
-                              <Text style={{ fontSize: 9, fontWeight: '700', color: '#2196F3' }}>
-                                {getUpdateCounter(concepto)}
-                              </Text>
-                            </View>
-                          )}
-                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#191c1e', lineHeight: 15 }} numberOfLines={2}>
-                            {concepto.descripcion}
-                          </Text>
-                          <Text style={{ fontSize: 9, fontWeight: '600', color: '#003d9b', marginTop: 2 }}>
-                            ${concepto.costo_unitario.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
-                          </Text>
-                          {/* Issue #1: prior count indicator */}
-                          {priorLocked > 0 && !modoActualizacion && (
-                            <Text style={{ fontSize: 8, fontWeight: '600', color: '#737685', marginTop: 1 }}>
-                              ({priorLocked} EST. PREV)
-                            </Text>
-                          )}
-                          {/* Issue #5: COMPL. badge */}
-                          {isFullyBlocked && !modoActualizacion && (
-                            <View style={{
-                              backgroundColor: '#1A7A3C', borderRadius: 3,
-                              paddingHorizontal: 4, paddingVertical: 1, marginTop: 2,
-                              alignSelf: 'flex-start',
-                            }}>
-                              <Text style={{ color: '#ffffff', fontSize: 7, fontWeight: '800' }}>COMPL.</Text>
-                            </View>
-                          )}
-                        </View>
-
-                        {/* Celdas interactivas */}
-                        {Array.from({ length: colCount }, (_, colIdx) => {
-                          const { bg, text, blocked, badgeText } = getCellVisual(concepto, colIdx);
-
-                          return (
-                            <TouchableOpacity
-                              key={colIdx}
-                              style={{
-                                width: CELL_W,
-                                padding: 4,
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                              }}
-                              onPress={() => handleCellTap(concepto, colIdx)}
-                              onLongPress={() => handleLongPress(concepto)}
-                              delayLongPress={500}
-                              activeOpacity={blocked ? 1 : 0.7}
-                            >
-                              <View style={{
-                                width: CELL_W - 8,
-                                aspectRatio: 1,
-                                borderRadius: 4,
-                                backgroundColor: bg,
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                              }}>
-                                {text !== null && (
-                                  <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>
-                                    {text}
-                                  </Text>
-                                )}
-                                {/* Issue #1: badge S.X en esquina superior derecha */}
-                                {badgeText !== null && (
-                                  <View style={{
-                                    position: 'absolute', top: 1, right: 1,
-                                    backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 2,
-                                    paddingHorizontal: 2, paddingVertical: 0.5,
-                                  }}>
-                                    <Text style={{ color: '#ffffff', fontSize: 6, fontWeight: '700' }}>
-                                      {badgeText}
-                                    </Text>
-                                  </View>
-                                )}
-                              </View>
-                            </TouchableOpacity>
-                          );
-                        })}
-                      </View>
-                    );
-                  })}
+                  {paq.conceptos.map((concepto, idx) => (
+                    <ConceptoRow
+                      key={concepto.id}
+                      concepto={concepto}
+                      detalle={detalles[concepto.id]}
+                      priorLocked={priorData[concepto.id]?.cantidad ?? 0}
+                      priorSemana={priorData[concepto.id]?.semana ?? 0}
+                      isEvenRow={idx % 2 === 0}
+                      colCount={colCount}
+                      cellW={CELL_W}
+                      colW={COL_W}
+                      modoActualizacion={modoActualizacion}
+                      isViewMode={isViewMode}
+                      currentWeek={currentWeek}
+                      onCellTap={handleCellTap}
+                      onLongPress={handleLongPress}
+                      onMarcarTodo={handleMarcarTodo}
+                      onDesmarcarTodo={handleDesmarcarTodo}
+                    />
+                  ))}
                 </View>
               ))}
 
