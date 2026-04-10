@@ -32,6 +32,8 @@ export default function RegisterScreen() {
   const [showConfirm, setShowConfirm]     = useState(false);
   const [loading, setLoading]             = useState(false);
   const [error, setError]                 = useState('');
+  const [acceptedTerms, setAcceptedTerms]     = useState(false);
+  const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
 
   // ── Validación y registro ──────────────────────────────────────────────────
   const handleRegister = async () => {
@@ -61,6 +63,10 @@ export default function RegisterScreen() {
       setError('Las contrasenas no coinciden.');
       return;
     }
+    if (!acceptedTerms || !acceptedPrivacy) {
+      setError('Debes aceptar los Términos y Condiciones y el Aviso de Privacidad.');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -75,7 +81,7 @@ export default function RegisterScreen() {
       );
       await AsyncStorage.setItem(STORAGE_KEY_LOGGED, 'true');
       await AsyncStorage.setItem(STORAGE_KEY_USERID, userId);
-      await activateTrial();
+      await activateTrial(userId);
       router.replace('/(tabs)');
     } catch (e) {
       setError('Error al crear la cuenta. Intenta de nuevo.');
@@ -120,7 +126,7 @@ export default function RegisterScreen() {
             fontSize: 13, color: '#737685', marginTop: 4,
             fontFamily: 'Inter', fontWeight: '500',
           }}>
-            EstimaFácil · Registro gratuito
+            {`EstimaF\u00e1cil\u00AE \u00B7 Registro gratuito`}
           </Text>
         </View>
 
@@ -275,15 +281,15 @@ export default function RegisterScreen() {
             disabled={loading}
             style={{
               marginTop: 4,
-              backgroundColor: loading ? '#c3c6d6' : '#003d9b',
+              backgroundColor: loading ? '#c3c6d6' : (!acceptedTerms || !acceptedPrivacy) ? '#8a8d9e' : '#003d9b',
               borderRadius: 12,
               paddingVertical: 16,
               alignItems: 'center',
               shadowColor: '#003d9b',
               shadowOffset: { width: 0, height: 6 },
-              shadowOpacity: loading ? 0 : 0.3,
+              shadowOpacity: (loading || !acceptedTerms || !acceptedPrivacy) ? 0 : 0.3,
               shadowRadius: 12,
-              elevation: loading ? 0 : 6,
+              elevation: (loading || !acceptedTerms || !acceptedPrivacy) ? 0 : 6,
             }}
             activeOpacity={0.85}
           >
@@ -299,13 +305,62 @@ export default function RegisterScreen() {
             )}
           </TouchableOpacity>
 
-          {/* Texto legal */}
-          <Text style={{
-            textAlign: 'center', fontSize: 11, color: '#737685',
-            fontFamily: 'Inter', lineHeight: 16, marginTop: 4,
-          }}>
-            Al registrarte aceptas los Términos y Condiciones
-          </Text>
+          {/* Checkboxes T&C */}
+          <View style={{ gap: 10, marginTop: 4 }}>
+            {/* Acepto Términos y Condiciones */}
+            <TouchableOpacity
+              onPress={() => setAcceptedTerms(!acceptedTerms)}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 2 }}
+              activeOpacity={0.7}
+            >
+              <View style={{
+                width: 20, height: 20, borderRadius: 4,
+                borderWidth: 2,
+                borderColor: acceptedTerms ? '#003d9b' : '#c3c6d6',
+                backgroundColor: acceptedTerms ? '#003d9b' : 'transparent',
+                justifyContent: 'center', alignItems: 'center',
+              }}>
+                {acceptedTerms && (
+                  <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '800' }}>✓</Text>
+                )}
+              </View>
+              <Text style={{ fontSize: 13, color: '#434654', fontFamily: 'Inter', fontWeight: '500' }}>
+                {'Acepto los '}
+              </Text>
+              <TouchableOpacity onPress={() => router.push('/terminos' as any)} activeOpacity={0.7}>
+                <Text style={{ fontSize: 13, color: '#003d9b', fontFamily: 'Inter', fontWeight: '600', textDecorationLine: 'underline' }}>
+                  Términos y Condiciones
+                </Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+
+            {/* He leído Aviso de Privacidad */}
+            <TouchableOpacity
+              onPress={() => setAcceptedPrivacy(!acceptedPrivacy)}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 2 }}
+              activeOpacity={0.7}
+            >
+              <View style={{
+                width: 20, height: 20, borderRadius: 4,
+                borderWidth: 2,
+                borderColor: acceptedPrivacy ? '#003d9b' : '#c3c6d6',
+                backgroundColor: acceptedPrivacy ? '#003d9b' : 'transparent',
+                justifyContent: 'center', alignItems: 'center',
+              }}>
+                {acceptedPrivacy && (
+                  <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '800' }}>✓</Text>
+                )}
+              </View>
+              <Text style={{ fontSize: 13, color: '#434654', fontFamily: 'Inter', fontWeight: '500' }}>
+                {'He leído el '}
+              </Text>
+              <TouchableOpacity onPress={() => router.push('/privacidad' as any)} activeOpacity={0.7}>
+                <Text style={{ fontSize: 13, color: '#003d9b', fontFamily: 'Inter', fontWeight: '600', textDecorationLine: 'underline' }}>
+                  Aviso de Privacidad
+                </Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </View>
 
           {/* Volver al login */}
           <TouchableOpacity

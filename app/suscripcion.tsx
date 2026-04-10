@@ -96,10 +96,11 @@ export default function SuscripcionScreen() {
   }, []);
 
   const loadSubscriptionStatus = async () => {
-    const active  = await hasActiveSubscription();
-    const days    = await getDaysRemaining();
-    const type    = await getSubscriptionType();
-    const expires = await getSubscriptionExpiry();
+    const userId  = await getCurrentUserId();
+    const active  = await hasActiveSubscription(userId);
+    const days    = await getDaysRemaining(userId);
+    const type    = await getSubscriptionType(userId);
+    const expires = await getSubscriptionExpiry(userId);
 
     if (!expires) {
       setStatus('none');

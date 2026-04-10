@@ -13,7 +13,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { router, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
-import { initDatabase, getProyectos, deleteProyecto, updateProyectoAlias } from '../../db/database';
+import { initDatabase, getProyectos, deleteProyecto, updateProyectoAlias, getTotalEstimadoPorProyecto } from '../../db/database';
 import { getCurrentUserId } from '../../utils/auth';
 import { hasActiveSubscription } from '../../utils/subscription';
 import ContractUploadModal from '../../components/ContractUploadModal';
@@ -29,6 +29,7 @@ interface Proyecto {
   semana_actual: number;
   numero_estimacion_actual: number;
   alias?: string;
+  monto_restante?: number;
 }
 
 export default function ProyectosScreen() {
@@ -40,6 +41,13 @@ export default function ProyectosScreen() {
 
   useEffect(() => {
     (async () => {
+      // Verificar sesion activa antes de mostrar la lista
+      const logged = await AsyncStorage.getItem('@estimafacil:logged');
+      if (logged !== 'true') {
+        router.replace('/(auth)/login');
+        return;
+      }
+
       await initDatabase();
       const firstTime = await AsyncStorage.getItem(STORAGE_KEY_FIRST_TIME);
       if (!firstTime) {
@@ -61,10 +69,18 @@ export default function ProyectosScreen() {
     try {
       const userId = await getCurrentUserId();
       const data = await getProyectos(userId);
-      setProyectos(data as Proyecto[]);
+
+      // Calcular monto_restante para cada proyecto
+      const proyectosConRestante = await Promise.all(
+        (data as Proyecto[]).map(async (p) => {
+          const totalEstimado = await getTotalEstimadoPorProyecto(p.id);
+          return { ...p, monto_restante: Math.max(0, p.monto_contrato - totalEstimado) };
+        })
+      );
+      setProyectos(proyectosConRestante);
 
       // Verificar suscripcion (no bloquear — solo informar)
-      const active = await hasActiveSubscription();
+      const active = await hasActiveSubscription(userId);
       if (!active) {
         Alert.alert(
           'Suscripcion requerida',
@@ -197,6 +213,14 @@ export default function ProyectosScreen() {
           </Text>
           <Text style={{ fontSize: 14, fontWeight: '800', color: '#191c1e', marginTop: 2 }}>
             #{item.numero_estimacion_actual}
+          </Text>
+        </View>
+        <View>
+          <Text style={{ fontSize: 9, color: '#737685', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            Monto Restante
+          </Text>
+          <Text style={{ fontSize: 14, fontWeight: '800', color: item.monto_restante === 0 ? '#004f11' : '#93000a', marginTop: 2 }}>
+            ${(item.monto_restante ?? 0).toLocaleString('es-MX', { minimumFractionDigits: 0 })}
           </Text>
         </View>
       </View>

@@ -14,6 +14,11 @@ export default function RootLayout() {
           <Stack.Screen name="proyecto" />
           <Stack.Screen name="estimacion" />
           <Stack.Screen name="pdf" />
+          <Stack.Screen name="suscripcion" />
+          <Stack.Screen name="terminos" />
+          <Stack.Screen name="privacidad" />
+          <Stack.Screen name="evidencia" />
+          <Stack.Screen name="croquis" />
         </Stack>
         <StatusBar style="auto" />
       </SafeAreaProvider>

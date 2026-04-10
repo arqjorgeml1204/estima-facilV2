@@ -146,7 +146,7 @@ export default function LoginScreen() {
             fontSize: 28, fontWeight: '800', color: '#191c1e',
             fontFamily: 'Manrope', letterSpacing: -0.5,
           }}>
-            EstimaFácil
+            {`EstimaF\u00e1cil\u00AE`}
           </Text>
           <Text style={{
             fontSize: 13, color: '#737685', marginTop: 4,

@@ -354,6 +354,23 @@ export async function deleteCroquis(id: number) {
   await getDb().runAsync('DELETE FROM croquis WHERE id=?', [id]);
 }
 
+// ─── Total Estimado por Proyecto ──────────────────────────────────────────────
+
+/**
+ * Calcula el total estimado acumulado de un proyecto
+ * (suma de todos los importe_esta_est de todas sus estimaciones).
+ */
+export async function getTotalEstimadoPorProyecto(proyectoId: number): Promise<number> {
+  const result = await getDb().getFirstAsync<{ total: number }>(
+    `SELECT COALESCE(SUM(de.importe_esta_est), 0) as total
+     FROM detalle_estimacion de
+     JOIN estimacion e ON de.estimacion_id = e.id
+     WHERE e.proyecto_id = ?`,
+    [proyectoId]
+  );
+  return result?.total ?? 0;
+}
+
 // ─── Totales ──────────────────────────────────────────────────────────────────
 
 export async function recalcularTotalesEstimacion(estimacionId: number) {
