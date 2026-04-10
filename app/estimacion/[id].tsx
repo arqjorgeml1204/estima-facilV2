@@ -183,6 +183,12 @@ const ConceptoRow = React.memo(function ConceptoRow({
         <Text style={{ fontSize: 9, fontWeight: '600', color: '#003d9b', marginTop: 2 }}>
           ${concepto.costo_unitario.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
         </Text>
+        <Text style={{
+          fontSize: 10, fontWeight: '700', marginTop: 2,
+          color: effectiveAnterior >= concepto.factor ? '#004f11' : effectiveAnterior > 0 ? '#003d9b' : '#737685',
+        }}>
+          {effectiveAnterior}/{concepto.factor}
+        </Text>
         {priorLocked > 0 && !modoActualizacion && (
           <Text style={{ fontSize: 8, fontWeight: '600', color: '#737685', marginTop: 1 }}>
             ({priorLocked} EST. PREV)
@@ -313,13 +319,14 @@ function InputModal({
 // ─── Summary Modal (Issue #14) ─────────────────────────────────────────────────
 
 function SummaryModal({
-  visible, conceptos, detalles, priorData,
+  visible, conceptos, detalles, priorData, proyecto,
   onConfirm, onClose,
 }: {
   visible: boolean;
   conceptos: Concepto[];
   detalles: DetalleMap;
   priorData: PriorData;
+  proyecto: any;
   onConfirm: (antOverrides: Record<number, number>) => void;
   onClose: () => void;
 }) {
@@ -335,6 +342,23 @@ function SummaryModal({
     // BUG-1: Solo mostrar conceptos con importe del periodo actual > 0
     return cantEsta * c.costo_unitario > 0;
   });
+
+  // Calculate totals for summary display
+  const summarySubtotal = activeConceptos.reduce((sum, c) => {
+    const det = detalles[c.id];
+    const cantEsta = det?.cantidad_esta_est ?? 0;
+    return sum + cantEsta * c.costo_unitario;
+  }, 0);
+
+  const summaryMontoANT = conceptos.reduce((sum, c) => {
+    const modeActAdd = detalles[c.id]?.cantidad_anterior ?? 0;
+    return sum + modeActAdd * c.costo_unitario;
+  }, 0);
+
+  const summaryEstimadoPrevio = conceptos.reduce((sum, c) => {
+    const priorLocked = priorData[c.id]?.cantidad ?? 0;
+    return sum + priorLocked * c.costo_unitario;
+  }, 0);
 
   const handleConfirm = () => {
     const overrides: Record<number, number> = {};
@@ -424,6 +448,30 @@ function SummaryModal({
             })}
           </ScrollView>
 
+          {/* Totals summary */}
+          <View style={{ marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#e0e0e0' }}>
+            {summaryMontoANT > 0 && (
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                <Text style={{ fontSize: 11, fontWeight: '600', color: '#2196F3' }}>Importe ANT (esta sesion)</Text>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#2196F3' }}>
+                  ${summaryMontoANT.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                </Text>
+              </View>
+            )}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+              <Text style={{ fontSize: 11, fontWeight: '600', color: '#191c1e' }}>Subtotal esta estimacion</Text>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: '#004f11' }}>
+                ${summarySubtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#f3f4f6', borderRadius: 6, padding: 8, marginTop: 4 }}>
+              <Text style={{ fontSize: 12, fontWeight: '800', color: '#003d9b' }}>Monto Restante</Text>
+              <Text style={{ fontSize: 12, fontWeight: '800', color: '#003d9b' }}>
+                ${((proyecto?.monto_contrato ?? 0) - summaryEstimadoPrevio - summaryMontoANT - summarySubtotal).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+              </Text>
+            </View>
+          </View>
+
           {/* Buttons */}
           <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
             <TouchableOpacity
@@ -479,6 +527,9 @@ export default function EstimacionGrid() {
 
   // Summary modal (Issue #14)
   const [summaryVisible, setSummaryVisible] = useState(false);
+
+  // Filtro solo disponibles (Task 8b)
+  const [soloDisponibles, setSoloDisponibles] = useState(false);
 
   // ── Carga inicial ────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -790,10 +841,19 @@ export default function EstimacionGrid() {
   const CELL_W = 42;
   const COL_W = 170;
 
+  // ── Filtrar conceptos (Task 8b) ────────────────────────────────────────────────
+  const conceptosFiltrados = useMemo(() => {
+    if (!soloDisponibles) return conceptos;
+    return conceptos.filter(c => {
+      const eff = (detalles[c.id]?.cantidad_anterior ?? 0) + (priorData[c.id]?.cantidad ?? 0);
+      return eff < c.factor;
+    });
+  }, [soloDisponibles, conceptos, detalles, priorData]);
+
   // ── Agrupar por paquete ───────────────────────────────────────────────────────
   const paquetes: { nombre: string; conceptos: Concepto[] }[] = [];
   let lastPaq = '';
-  for (const c of conceptos) {
+  for (const c of conceptosFiltrados) {
     if (c.paquete !== lastPaq) {
       paquetes.push({ nombre: c.paquete, conceptos: [] });
       lastPaq = c.paquete;
@@ -942,7 +1002,13 @@ export default function EstimacionGrid() {
               Restante
             </Text>
             <Text style={{ fontSize: 16, fontWeight: '800', color: '#003d9b' }}>
-              ${((proyecto?.monto_contrato - totales.subtotal) / 1000).toFixed(1)}k
+              ${((() => {
+                const montoANT = conceptos.reduce((sum, c) => {
+                  const modeActAdd = detalles[c.id]?.cantidad_anterior ?? 0;
+                  return sum + modeActAdd * c.costo_unitario;
+                }, 0);
+                return (proyecto?.monto_contrato - totales.subtotal - montoANT) / 1000;
+              })()).toFixed(1)}k
             </Text>
           </View>
         </View>
@@ -998,14 +1064,32 @@ export default function EstimacionGrid() {
         shadowColor: '#191c1e', shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
       }}>
-        {/* Leyenda */}
+        {/* Leyenda + filtro */}
         <View style={{
           paddingHorizontal: 14, paddingVertical: 8,
           flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
           backgroundColor: 'rgba(231,232,234,0.2)',
           borderBottomWidth: 1, borderBottomColor: 'rgba(195,198,214,0.15)',
         }}>
-          <Text style={{ fontSize: 12, fontWeight: '800', color: '#191c1e' }}>Conceptos</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <Text style={{ fontSize: 12, fontWeight: '800', color: '#191c1e' }}>Conceptos</Text>
+            <TouchableOpacity
+              onPress={() => setSoloDisponibles(prev => !prev)}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 4,
+                paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4,
+                backgroundColor: soloDisponibles ? '#003d9b' : 'transparent',
+                borderWidth: soloDisponibles ? 0 : 1,
+                borderColor: '#c3c6d6',
+              }}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="filter-list" size={14} color={soloDisponibles ? '#ffffff' : '#737685'} />
+              <Text style={{ fontSize: 9, fontWeight: '700', color: soloDisponibles ? '#ffffff' : '#737685' }}>
+                Solo disponibles
+              </Text>
+            </TouchableOpacity>
+          </View>
           <View style={{ flexDirection: 'row', gap: 10 }}>
             {[
               { color: '#1A7A3C', label: 'ESTIMADO' },
@@ -1246,6 +1330,7 @@ export default function EstimacionGrid() {
         conceptos={conceptos}
         detalles={detalles}
         priorData={priorData}
+        proyecto={proyecto}
         onConfirm={handleSummaryConfirm}
         onClose={() => setSummaryVisible(false)}
       />
