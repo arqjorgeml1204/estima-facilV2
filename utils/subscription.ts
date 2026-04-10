@@ -8,8 +8,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ── Configuracion Supabase ─────────────────────────────────────────────────
 // CONFIGURAR ESTOS VALORES DESPUES DE CREAR EL PROYECTO EN SUPABASE
-const SUPABASE_URL = 'PENDING_CONFIG';
-const SUPABASE_ANON_KEY = 'PENDING_CONFIG';
+const SUPABASE_URL = 'https://zolfaqrvgirdnwqypxwd.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpvbGZhcXJ2Z2lyZG53cXlweHdkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU3Njk0MDAsImV4cCI6MjA5MTM0NTQwMH0.UOYB-dHAGJa8ZlP-NZhT6wgLvb-Cv9Yo82TWhO0W3R8';
 
 // ── Storage Keys ───────────────────────────────────────────────────────────
 const KEY_SUB_EXPIRES    = '@estimafacil:sub_expires';
