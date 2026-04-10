@@ -318,11 +318,21 @@ export class PdfDeterministicExtractor {
    * document order established during line processing.
    */
   private buildResult(context: ParserContext): ContratoExtraido {
-    // Contratista: only from alcanceBuffer — no headerBuffer fallback
-    // (headerBuffer produces incorrect long text when carátula is present)
+    // Contratista: primary source is alcanceBuffer (set during state machine).
+    // Fallback 1: re-run extractContratista on the full alcanceBuffer (may
+    //   succeed if more text accumulated after the last incremental attempt).
+    // Fallback 2: keyword-based search in alcanceBuffer.
+    // Fallback 3 (last resort): try extractContratista on headerBuffer,
+    //   only if alcanceBuffer produced nothing.
     let contratista = context.contratista;
     if (!contratista) {
+      contratista = extractContratista(context.alcanceBuffer);
+    }
+    if (!contratista) {
       contratista = this.extractContratistaFallback(context.alcanceBuffer);
+    }
+    if (!contratista && context.headerBuffer) {
+      contratista = extractContratista(context.headerBuffer);
     }
 
     let descripcionObra = context.descripcionObra;
@@ -349,28 +359,33 @@ export class PdfDeterministicExtractor {
   }
 
   /**
-   * Last-resort contratista extraction: looks for lines containing keywords
-   * like "CONTRATISTA", "EMPRESA", "RAZÓN SOCIAL" followed by ":"
+   * Last-resort contratista extraction: searches the buffer (which may be a
+   * single space-joined string with no newlines) for keyword:value patterns
+   * like "contratista:", "empresa contratista:", "razón social:".
    * Hermes-safe: no named groups, no lookbehind.
    */
   private extractContratistaFallback(buffer: string): string | null {
-    const lines = buffer.split(/\n/);
-    for (const line of lines) {
-      const lower = line.toLowerCase();
-      // Match "contratista:", "empresa contratista:", "razón social:"
-      if (
-        lower.includes('contratista:') ||
-        lower.includes('empresa contratista:') ||
-        lower.includes('razon social:') ||
-        lower.includes('razón social:')
-      ) {
-        const colonIdx = line.indexOf(':');
-        if (colonIdx >= 0) {
-          const value = collapseLine(line.slice(colonIdx + 1));
-          if (value && !/JAVER/i.test(value)) return value;
+    if (!buffer) return null;
+
+    // The buffer is space-joined (no newlines), so use regex to find
+    // keyword + colon + value. Value terminates at next known keyword or
+    // runs of lowercase text that indicate a new field.
+    const patterns = [
+      /[Ee]mpresa\s+[Cc]ontratista\s*:\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s.,'()-]{2,79})/,
+      /[Rr]az[oó]n\s+[Ss]ocial\s*:\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s.,'()-]{2,79})/,
+      /[Cc]ontratista\s*:\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s.,'()-]{2,79})/,
+    ];
+
+    for (const re of patterns) {
+      const match = buffer.match(re);
+      if (match) {
+        const candidate = collapseLine(match[1]);
+        if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
+          return candidate.substring(0, 80);
         }
       }
     }
+
     return null;
   }
 

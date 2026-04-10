@@ -34,26 +34,66 @@ export function collapseLine(line: string): string {
 
 /**
  * Extract the contractor name from the "Alcance detallado" section ONLY.
- * New format: "Contratista <NAME_ON_SINGLE_LINE> Fondo de garantía"
- * Fallback: old format "CONTRATISTA <NAME> APODERADO LEGAL" (single-line)
+ * Tries multiple patterns in priority order; returns the first match.
  * Max 80 chars. Hermes-safe: no lookbehind, no named groups.
+ *
+ * NOTE: alcanceBuffer is space-joined (no newlines), so all patterns use
+ * single-line matching. The buffer looks like:
+ *   "...Contratista NOMBRE EMPRESA S.A. DE C.V. Fondo de garantia 5 %..."
  */
 export function extractContratista(text: string): string | null {
-  // New format: single-line match between "Contratista" and "Fondo de garantía"
-  const newMatch = text.match(/Contratista\s+([^\n]+?)\s+Fondo\s+de\s+garant[ií]a/i);
-  if (newMatch) {
-    const candidate = collapseLine(newMatch[1]);
-    if (candidate) return candidate.substring(0, 80);
-  }
-  // Fallback: old format — single line only (no [\s\S])
-  const re = /CONTRATISTA\s+([^\n]+?)APODERADO\s+LEGAL/gi;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
-    const candidate = collapseLine(match[1]);
-    if (candidate && !/JAVER/i.test(candidate)) {
+  if (!text) return null;
+
+  // Pattern 1: "Contratista" (with optional colon) ... "Fondo de garantia"
+  // This is the most reliable anchor pair in the new PDF format.
+  const p1 = text.match(/[Cc]ontratista\s*:?\s+(.+?)\s+[Ff]ondo\s+de\s+garant[ií]a/);
+  if (p1) {
+    const candidate = collapseLine(p1[1]);
+    if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
       return candidate.substring(0, 80);
     }
   }
+
+  // Pattern 2: "CONTRATISTA" ... "APODERADO LEGAL" (old format)
+  const p2 = text.match(/CONTRATISTA\s*:?\s+(.+?)\s*APODERADO\s+LEGAL/);
+  if (p2) {
+    const candidate = collapseLine(p2[1]);
+    if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
+      return candidate.substring(0, 80);
+    }
+  }
+
+  // Pattern 3: "Contratista" (with optional colon) ... "Monto contratado"
+  // Some PDFs use Monto contratado as the next field after contractor name.
+  const p3 = text.match(/[Cc]ontratista\s*:?\s+(.+?)\s+[Mm]onto\s+contratado/);
+  if (p3) {
+    const candidate = collapseLine(p3[1]);
+    if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
+      return candidate.substring(0, 80);
+    }
+  }
+
+  // Pattern 4: "Contratista" (with optional colon) followed by an uppercase name
+  // (at least 3 chars of uppercase/accented/spaces/dots before the next known keyword).
+  // Terminates at common section keywords or end of buffer.
+  const p4 = text.match(/[Cc]ontratista\s*:?\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s.,]+(?:S\.?\s*A\.?\s*(?:DE\s+C\.?\s*V\.?)?|S\.?\s*C\.?|S\.?\s*DE\s+R\.?\s*L\.?)?)/);
+  if (p4) {
+    const candidate = collapseLine(p4[1]);
+    if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
+      return candidate.substring(0, 80);
+    }
+  }
+
+  // Pattern 5: Broader uppercase name after "Contratista" — grab up to 80 chars
+  // of uppercase text (letters, spaces, dots, commas, accents).
+  const p5 = text.match(/[Cc]ontratista\s*:?\s+([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s.,'()-]{2,79})/);
+  if (p5) {
+    const candidate = collapseLine(p5[1]);
+    if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
+      return candidate.substring(0, 80);
+    }
+  }
+
   return null;
 }
 
