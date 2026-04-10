@@ -41,7 +41,7 @@ const EMAILJS_PUBLIC_KEY = 'PENDING_CONFIG';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type SubStatus = 'active' | 'expired' | 'none';
-type ModalStep = 'none' | 'method' | 'transfer' | 'cash' | 'success';
+type ModalStep = 'none' | 'method' | 'transfer' | 'cash' | 'confirm' | 'success';
 type PlanType = 'monthly' | 'annual';
 
 // ── Plan config ──────────────────────────────────────────────────────────────
@@ -90,6 +90,7 @@ export default function SuscripcionScreen() {
   const [processing, setProcessing]     = useState(false);
   const [generatedToken, setGeneratedToken] = useState('');
   const [copied, setCopied]             = useState(false);
+  const [prevStep, setPrevStep]         = useState<ModalStep>('none');
 
   useEffect(() => {
     loadSubscriptionStatus();
@@ -623,7 +624,7 @@ export default function SuscripcionScreen() {
 
             {/* Acciones */}
             <TouchableOpacity
-              onPress={handlePaymentConfirmed}
+              onPress={() => { setPrevStep('transfer'); setModalStep('confirm'); }}
               disabled={processing}
               activeOpacity={0.85}
               style={{
@@ -737,7 +738,7 @@ export default function SuscripcionScreen() {
 
             {/* Acciones */}
             <TouchableOpacity
-              onPress={handlePaymentConfirmed}
+              onPress={() => { setPrevStep('cash'); setModalStep('confirm'); }}
               disabled={processing}
               activeOpacity={0.85}
               style={{
@@ -769,6 +770,81 @@ export default function SuscripcionScreen() {
             >
               <Text style={{ color: '#737685', fontSize: 14, fontWeight: '600' }}>
                 En otro momento
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          MODAL: Confirmacion de pago
+          ═══════════════════════════════════════════════════════════════════════ */}
+      <Modal
+        visible={modalStep === 'confirm'}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setModalStep(prevStep)}
+      >
+        <View style={{
+          flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+          justifyContent: 'center', alignItems: 'center', padding: 24,
+        }}>
+          <View style={{
+            backgroundColor: '#ffffff', borderRadius: 16, padding: 24,
+            width: '100%', maxWidth: 360, alignItems: 'center',
+          }}>
+            {/* Icono */}
+            <MaterialIcons name="payment" size={48} color="#003d9b" style={{ marginBottom: 16 }} />
+
+            <Text style={{
+              fontSize: 18, fontWeight: '800', color: '#191c1e',
+            }}>
+              Confirmar pago
+            </Text>
+
+            <Text style={{
+              fontSize: 13, color: '#737685', textAlign: 'center',
+              marginTop: 8, marginBottom: 24, lineHeight: 20,
+            }}>
+              Al confirmar, se generara tu codigo de activacion y se notificara al administrador. Esta accion no se puede deshacer.
+            </Text>
+
+            {/* Boton primario: confirmar */}
+            <TouchableOpacity
+              onPress={handlePaymentConfirmed}
+              disabled={processing}
+              activeOpacity={0.85}
+              style={{
+                backgroundColor: processing ? '#c3c6d6' : '#003d9b',
+                borderRadius: 10, paddingVertical: 14,
+                alignItems: 'center', flexDirection: 'row',
+                justifyContent: 'center', gap: 8,
+                width: '100%', marginBottom: 10,
+              }}
+            >
+              {processing ? (
+                <ActivityIndicator color="#ffffff" size="small" />
+              ) : (
+                <Text style={{ color: '#ffffff', fontSize: 14, fontWeight: '700' }}>
+                  Confirmo que ya realice el pago
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            {/* Boton secundario: regresar */}
+            <TouchableOpacity
+              onPress={() => setModalStep(prevStep)}
+              disabled={processing}
+              activeOpacity={0.8}
+              style={{
+                borderRadius: 10, paddingVertical: 14,
+                alignItems: 'center', width: '100%',
+                borderWidth: 1, borderColor: '#c3c6d6',
+                backgroundColor: 'transparent',
+              }}
+            >
+              <Text style={{ color: '#737685', fontSize: 14, fontWeight: '600' }}>
+                Cerrar
               </Text>
             </TouchableOpacity>
           </View>
