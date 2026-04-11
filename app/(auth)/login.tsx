@@ -12,7 +12,8 @@ import {
 import { useState, useEffect } from 'react';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { initDatabase } from '../../db/database';
+import { hashPassword } from '../../utils/auth';
+import { getUsuarioByUserId, initDatabase } from '../../db/database';
 
 const STORAGE_KEY_EMAIL    = '@estimafacil:email';
 const STORAGE_KEY_REMEMBER = '@estimafacil:remember';
@@ -92,6 +93,23 @@ export default function LoginScreen() {
         ? input.toLowerCase()
         : `tel:${input.replace(/[^0-9]/g, '')}`;
 
+      // VERIFICACIÓN REAL DE CREDENCIALES
+      await initDatabase();
+      const usuario = await getUsuarioByUserId(userId);
+      if (!usuario) {
+        setError('No existe cuenta con este correo/teléfono. Regístrate primero.');
+        setLoading(false);
+        return;
+      }
+
+      const inputHash = await hashPassword(password, usuario.salt);
+      if (inputHash !== usuario.password_hash) {
+        setError('Contraseña incorrecta. Inténtalo de nuevo.');
+        setLoading(false);
+        return;
+      }
+
+      // Login válido — guardar sesión
       if (remember) {
         await AsyncStorage.setItem(STORAGE_KEY_EMAIL, input);
         await AsyncStorage.setItem(STORAGE_KEY_REMEMBER, 'true');
@@ -101,7 +119,6 @@ export default function LoginScreen() {
       }
       await AsyncStorage.setItem(STORAGE_KEY_LOGGED, 'true');
       await AsyncStorage.setItem(STORAGE_KEY_USERID, userId);
-
       router.replace('/(tabs)');
     } catch (e) {
       setError('Error al iniciar sesion. Intenta de nuevo.');

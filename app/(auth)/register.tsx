@@ -13,6 +13,8 @@ import { useState } from 'react';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { activateTrial } from '../../utils/subscription';
+import { generateSalt, hashPassword } from '../../utils/auth';
+import { createUsuario, getUsuarioByUserId, initDatabase } from '../../db/database';
 
 // TODO: Integrar con auth real cuando se implemente backend
 const STORAGE_KEY_LOGGED  = '@estimafacil:logged';
@@ -74,7 +76,24 @@ export default function RegisterScreen() {
         ? `tel:${phone.trim().replace(/[^0-9]/g, '')}`
         : email.trim().toLowerCase();
 
-      // TODO: reemplazar con registro real en backend
+      await initDatabase();
+
+      // Verificar si ya existe una cuenta con este user_id
+      const existingUser = await getUsuarioByUserId(userId);
+      if (existingUser) {
+        setError('Ya existe una cuenta con este correo/teléfono. Inicia sesión.');
+        setLoading(false);
+        return;
+      }
+
+      // Crear credenciales hasheadas
+      const salt = generateSalt();
+      const passwordHash = await hashPassword(password, salt);
+
+      // Guardar en SQLite
+      await createUsuario(userId, nombre.trim(), passwordHash, salt);
+
+      // Guardar sesión en AsyncStorage
       await AsyncStorage.setItem(
         STORAGE_KEY_SESSION,
         JSON.stringify({ nombre: nombre.trim(), email: usePhone ? '' : email.trim(), phone: usePhone ? phone.trim() : '' }),

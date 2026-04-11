@@ -224,4 +224,13 @@ export const MIGRATIONS = `
     descripcion    TEXT,
     created_at     TEXT    DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS usuarios (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       TEXT    UNIQUE NOT NULL,
+    nombre        TEXT    NOT NULL,
+    password_hash TEXT    NOT NULL,
+    salt          TEXT    NOT NULL,
+    created_at    TEXT    DEFAULT (datetime('now'))
+  );
 `;

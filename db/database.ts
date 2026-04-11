@@ -50,6 +50,19 @@ export async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
       try {
         await database.execAsync(`ALTER TABLE empresa ADD COLUMN user_id TEXT DEFAULT ''`);
       } catch (_) {}
+      // Tabla usuarios (auth local)
+      try {
+        await database.execAsync(`
+          CREATE TABLE IF NOT EXISTS usuarios (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       TEXT    UNIQUE NOT NULL,
+            nombre        TEXT    NOT NULL,
+            password_hash TEXT    NOT NULL,
+            salt          TEXT    NOT NULL,
+            created_at    TEXT    DEFAULT (datetime('now'))
+          )
+        `);
+      } catch (_) {}
       db = database;
       return database;
     })();
@@ -589,4 +602,32 @@ export async function guardarActualizacion(
       costoUnitarioMap[conceptoId] ?? 0
     );
   }
+}
+
+// ─── Auth local ──────────────────────────────────────────────────────────────
+
+export async function createUsuario(
+  userId: string,
+  nombre: string,
+  passwordHash: string,
+  salt: string,
+): Promise<void> {
+  await getDb().runAsync(
+    'INSERT INTO usuarios (user_id, nombre, password_hash, salt) VALUES (?,?,?,?)',
+    [userId, nombre, passwordHash, salt],
+  );
+}
+
+export async function getUsuarioByUserId(userId: string): Promise<{
+  user_id: string;
+  nombre: string;
+  password_hash: string;
+  salt: string;
+} | null> {
+  return getDb().getFirstAsync<{
+    user_id: string;
+    nombre: string;
+    password_hash: string;
+    salt: string;
+  }>('SELECT user_id, nombre, password_hash, salt FROM usuarios WHERE user_id=?', [userId]);
 }
