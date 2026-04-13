@@ -13,6 +13,7 @@ import { useState } from 'react';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { activateTrial } from '../../utils/subscription';
+import { sendWelcomeEmail, sendNewUserNotification } from '../../utils/emailjs';
 import { generateSalt, hashPassword } from '../../utils/auth';
 import { createUsuario, getUsuarioByUserId, initDatabase } from '../../db/database';
 
@@ -92,6 +93,7 @@ export default function RegisterScreen() {
 
       // Guardar en SQLite
       await createUsuario(userId, nombre.trim(), passwordHash, salt);
+      console.log('[REGISTER] usuario creado:', userId);
 
       // Guardar sesión en AsyncStorage
       await AsyncStorage.setItem(
@@ -101,6 +103,14 @@ export default function RegisterScreen() {
       await AsyncStorage.setItem(STORAGE_KEY_LOGGED, 'true');
       await AsyncStorage.setItem(STORAGE_KEY_USERID, userId);
       await activateTrial(userId);
+
+      // Notificaciones email (fire and forget — no bloquear flujo si fallan)
+      try {
+        const userNameForEmail = nombre?.trim() ?? userId;
+        sendWelcomeEmail(userId, userNameForEmail);
+        sendNewUserNotification(userId, userNameForEmail);
+      } catch (_) {}
+
       router.replace('/(tabs)');
     } catch (e) {
       setError('Error al crear la cuenta. Intenta de nuevo.');

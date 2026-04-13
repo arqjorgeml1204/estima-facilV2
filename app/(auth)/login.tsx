@@ -13,7 +13,7 @@ import { useState, useEffect } from 'react';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { hashPassword } from '../../utils/auth';
-import { getUsuarioByUserId, initDatabase } from '../../db/database';
+import { getUsuarioByUserId, initDatabase, getDb } from '../../db/database';
 
 const STORAGE_KEY_EMAIL    = '@estimafacil:email';
 const STORAGE_KEY_REMEMBER = '@estimafacil:remember';
@@ -95,6 +95,18 @@ export default function LoginScreen() {
 
       // VERIFICACIÓN REAL DE CREDENCIALES
       await initDatabase();
+      // Debug: verificar tabla usuarios
+      try {
+        const db = getDb();
+        const tableCheck = await db.getFirstAsync<{count:number}>(
+          "SELECT COUNT(*) as count FROM sqlite_master WHERE type='table' AND name='usuarios'"
+        );
+        console.log('[AUTH] tabla usuarios existe:', tableCheck?.count);
+        const userCount = await db.getFirstAsync<{count:number}>("SELECT COUNT(*) as count FROM usuarios");
+        console.log('[AUTH] total usuarios registrados:', userCount?.count);
+      } catch (e) {
+        console.log('[AUTH] error verificando tabla:', e);
+      }
       const usuario = await getUsuarioByUserId(userId);
       if (!usuario) {
         setError('No existe cuenta con este correo/teléfono. Regístrate primero.');

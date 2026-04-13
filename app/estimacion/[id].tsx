@@ -22,6 +22,7 @@ import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  initDatabase,
   getEstimacionById,
   getProyectoById,
   getConceptosByProyecto,
@@ -535,6 +536,7 @@ export default function EstimacionGrid() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      await initDatabase();
       const est = await getEstimacionById(estId);
       if (!est) {
         Alert.alert('Error', 'No se encontro la estimacion. Regresa e intenta de nuevo.');
