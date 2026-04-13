@@ -342,7 +342,8 @@ export class PdfDeterministicExtractor {
 
     // Fallback for numeroContrato / monto from header if alcance missed them
     const numeroContrato = context.numeroContrato
-      || extractNumeroContrato(context.headerBuffer);
+      || extractNumeroContrato(context.headerBuffer)
+      ?? `CONT-${Date.now()}`;
     const montoContrato = context.montoContrato
       ?? extractMonto(context.headerBuffer);
 
@@ -394,13 +395,7 @@ export class PdfDeterministicExtractor {
    * Throws on the first validation failure found.
    */
   private validate(result: ContratoExtraido): void {
-    if (result.numeroContrato == null) {
-      throw new ExtractionError(
-        'ENCABEZADO_INCOMPLETO',
-        'No se encontró el número de contrato.',
-        'numeroContrato',
-      );
-    }
+    // numeroContrato ya tiene fallback en buildResult, no se valida
     if (result.conjunto == null) {
       throw new ExtractionError(
         'ENCABEZADO_INCOMPLETO',

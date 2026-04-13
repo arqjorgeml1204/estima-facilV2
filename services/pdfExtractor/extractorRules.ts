@@ -33,6 +33,25 @@ export function collapseLine(line: string): string {
 // ─── Header extraction ───────────────────────────────────────────────────────
 
 /**
+ * Limpia un candidato de contratista removiendo texto de "fondo de garantia".
+ * Hermes-safe: no lookbehind, no named groups.
+ */
+function cleanCandidateContratista(raw: string): string {
+  const s = raw.trim();
+  // Tomar lo que viene ANTES de "fondo de garantia"
+  const beforeIdx = s.search(/\s+[Ff]ondo\s+de\s+garant/i);
+  if (beforeIdx > 2) {
+    return s.substring(0, beforeIdx).trim().substring(0, 80);
+  }
+  // Si empieza con "fondo de garantia", tomar lo que viene despues del porcentaje
+  const afterMatch = s.match(/^[Ff]ondo\s+de\s+garant[ií]a\s*[\d.]*\s*%?\s*(.+)/i);
+  if (afterMatch) {
+    return afterMatch[1].trim().substring(0, 80);
+  }
+  return s.substring(0, 80);
+}
+
+/**
  * Extract the contractor name from the "Alcance detallado" section ONLY.
  * Tries multiple patterns in priority order; returns the first match.
  * Max 80 chars. Hermes-safe: no lookbehind, no named groups.
@@ -44,13 +63,22 @@ export function collapseLine(line: string): string {
 export function extractContratista(text: string): string | null {
   if (!text) return null;
 
+  // Pattern 0: "Contratista:" seguido del nombre hasta keyword conocido o porcentaje
+  const p0 = text.match(/[Cc]ontratista\s*:\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s.,]+?)(?=\s*\d+\s*%|\s*[Ff]ondo|\s*[Mm]onto|\s*[Pp]rototipo|$)/);
+  if (p0) {
+    const candidate = cleanCandidateContratista(collapseLine(p0[1]));
+    if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
+      return candidate;
+    }
+  }
+
   // Pattern 1: "Contratista" (with optional colon) ... "Fondo de garantia"
   // This is the most reliable anchor pair in the new PDF format.
   const p1 = text.match(/[Cc]ontratista\s*:?\s+(.+?)\s+[Ff]ondo\s+de\s+garant[ií]a/);
   if (p1) {
     const candidate = collapseLine(p1[1]);
     if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
-      return candidate.substring(0, 80);
+      return cleanCandidateContratista(candidate);
     }
   }
 
@@ -59,7 +87,7 @@ export function extractContratista(text: string): string | null {
   if (p2) {
     const candidate = collapseLine(p2[1]);
     if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
-      return candidate.substring(0, 80);
+      return cleanCandidateContratista(candidate);
     }
   }
 
@@ -69,7 +97,7 @@ export function extractContratista(text: string): string | null {
   if (p3) {
     const candidate = collapseLine(p3[1]);
     if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
-      return candidate.substring(0, 80);
+      return cleanCandidateContratista(candidate);
     }
   }
 
@@ -80,7 +108,7 @@ export function extractContratista(text: string): string | null {
   if (p4) {
     const candidate = collapseLine(p4[1]);
     if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
-      return candidate.substring(0, 80);
+      return cleanCandidateContratista(candidate);
     }
   }
 
@@ -90,7 +118,7 @@ export function extractContratista(text: string): string | null {
   if (p5) {
     const candidate = collapseLine(p5[1]);
     if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
-      return candidate.substring(0, 80);
+      return cleanCandidateContratista(candidate);
     }
   }
 
@@ -107,11 +135,26 @@ export function extractConjunto(text: string): string | null {
 }
 
 /**
- * Extract the contract number. Pattern: MX-EDI-COV-digits with optional _AXX suffixes
+ * Extract the contract number. Supports multiple JAVER formats and generic patterns.
  */
 export function extractNumeroContrato(text: string): string | null {
-  const match = text.match(/MX-EDI-COV-\d+(?:_[A-Z]\d+)*/i);
-  return match ? match[0] : null;
+  // Pattern 1: MX-EDI-COV-XXXXXX (formato estandar JAVER, sufijos opcionales)
+  const m1 = text.match(/MX-EDI-COV-\d+(?:[-_][A-Z0-9]+)*/i);
+  if (m1) return m1[0].toUpperCase();
+
+  // Pattern 2: MX-XXX-XXX-XXXXXX (variantes JAVER con prefijo distinto)
+  const m2 = text.match(/MX-[A-Z]{2,5}-[A-Z]{2,5}-\d{4,}(?:[-_][A-Z0-9]+)*/i);
+  if (m2) return m2[0].toUpperCase();
+
+  // Pattern 3: "Numero de contrato: XXXXXXX"
+  const m3 = text.match(/[Nn][úu]m(?:ero)?\s*\.?\s*(?:de\s+)?[Cc]ontrato\s*:?\s*([A-Z0-9][A-Z0-9\-_\/]{3,})/i);
+  if (m3) return m3[1].toUpperCase();
+
+  // Pattern 4: Codigo con 3+ segmentos alfanumericos separados por guion
+  const m4 = text.match(/\b([A-Z]{2,6}-[A-Z0-9]{2,}-[A-Z0-9]{3,}(?:-[A-Z0-9]+)*)\b/i);
+  if (m4) return m4[1].toUpperCase();
+
+  return null;
 }
 
 /**

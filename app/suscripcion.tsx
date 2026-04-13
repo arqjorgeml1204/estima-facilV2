@@ -164,7 +164,7 @@ export default function SuscripcionScreen() {
       const userId = await getCurrentUserId();
 
       // 1. Insert token in Supabase
-      await fetch(`${SUPABASE_URL}/rest/v1/activation_codes`, {
+      const insertRes = await fetch(`${SUPABASE_URL}/rest/v1/activation_codes`, {
         method: 'POST',
         headers: {
           apikey: SUPABASE_ANON_KEY,
@@ -179,6 +179,14 @@ export default function SuscripcionScreen() {
           is_used: false,
         }),
       });
+
+      if (!insertRes.ok) {
+        const errBody = await insertRes.text().catch(() => '');
+        throw new Error(
+          `No se pudo registrar el token (${insertRes.status}). ` +
+          `Verifica la configuracion de Supabase o contacta al administrador.`
+        );
+      }
 
       // 2. Send email if user is email-based
       if (userId.includes('@')) {

@@ -534,32 +534,50 @@ export default function EstimacionGrid() {
   // ── Carga inicial ────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     setLoading(true);
-    const est = await getEstimacionById(estId);
-    const proy = await getProyectoById(est.proyecto_id);
-    const concs = await getConceptosByProyecto(est.proyecto_id) as Concepto[];
-    const dets = await getDetallesByEstimacion(estId);
-    const prior = await getCantidadesAnteriores(est.proyecto_id, estId);
+    try {
+      const est = await getEstimacionById(estId);
+      if (!est) {
+        Alert.alert('Error', 'No se encontro la estimacion. Regresa e intenta de nuevo.');
+        router.back();
+        return;
+      }
 
-    const detMap: DetalleMap = {};
-    for (const d of dets) {
-      detMap[d.concepto_id] = {
-        ...d,
-        cell_state: (d.cell_state as CellState) ?? 'empty',
-      };
+      const proy = await getProyectoById(est.proyecto_id);
+      if (!proy) {
+        Alert.alert('Error', 'No se encontro el proyecto asociado.');
+        router.back();
+        return;
+      }
+
+      const concs = await getConceptosByProyecto(est.proyecto_id) as Concepto[];
+      const dets = await getDetallesByEstimacion(estId);
+      const prior = await getCantidadesAnteriores(est.proyecto_id, estId);
+
+      const detMap: DetalleMap = {};
+      for (const d of dets) {
+        detMap[d.concepto_id] = {
+          ...d,
+          cell_state: (d.cell_state as CellState) ?? 'empty',
+        };
+      }
+
+      setEstimacion(est);
+      setProyecto(proy);
+      setConceptos(concs);
+      setDetalles(detMap);
+      setPriorData(prior);
+      setEstimNumber(String(est.numero ?? 1));
+      setTotales({
+        subtotal: est.subtotal || 0,
+        retencion: est.retencion || 0,
+        totalAPagar: est.total_a_pagar || 0,
+      });
+    } catch (e) {
+      Alert.alert('Error al cargar', 'Ocurrio un error inesperado. Regresa e intenta de nuevo.');
+      router.back();
+    } finally {
+      setLoading(false);
     }
-
-    setEstimacion(est);
-    setProyecto(proy);
-    setConceptos(concs);
-    setDetalles(detMap);
-    setPriorData(prior);
-    setEstimNumber(String(est.numero ?? 1));
-    setTotales({
-      subtotal: est.subtotal || 0,
-      retencion: est.retencion || 0,
-      totalAPagar: est.total_a_pagar || 0,
-    });
-    setLoading(false);
   }, [estId]);
 
   useEffect(() => { load(); }, []);
