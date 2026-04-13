@@ -2,7 +2,7 @@
   "expo": {
     "name": "EstimaFácil",
     "slug": "estimafacil",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "estimafacil",
@@ -23,7 +23,8 @@
         "backgroundColor": "#003d9b"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.estimafacil.app"
+      "package": "com.estimafacil.app",
+      "versionCode": 2
     },
     "web": {
       "bundler": "metro",
