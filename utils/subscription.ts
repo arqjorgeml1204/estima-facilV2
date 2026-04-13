@@ -100,7 +100,7 @@ export async function redeemCode(
   return { days: codeData.days, type: codeData.type };
 }
 
-// ── Trial 14 dias (idempotente) ────────────────────────────────────────────
+// ── Trial 15 dias (idempotente) ────────────────────────────────────────────
 
 export async function activateTrial(userId: string): Promise<void> {
   // Solo activar si no hay suscripcion previa para este usuario
@@ -108,7 +108,7 @@ export async function activateTrial(userId: string): Promise<void> {
   if (existing) return;
 
   const trialExpires = new Date();
-  trialExpires.setDate(trialExpires.getDate() + 14);
+  trialExpires.setDate(trialExpires.getDate() + 15);
   await AsyncStorage.setItem(keySubExpires(userId), trialExpires.toISOString());
   await AsyncStorage.setItem(keySubType(userId), 'trial');
   await AsyncStorage.setItem(keyTrialStarted(userId), new Date().toISOString());

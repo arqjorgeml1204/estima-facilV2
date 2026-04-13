@@ -15,7 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 import { initDatabase, getProyectos, deleteProyecto, updateProyectoAlias, getTotalEstimadoPorProyecto } from '../../db/database';
 import { getCurrentUserId } from '../../utils/auth';
-import { hasActiveSubscription } from '../../utils/subscription';
+import { hasActiveSubscription, activateTrial, getSubscriptionType } from '../../utils/subscription';
 import ContractUploadModal from '../../components/ContractUploadModal';
 
 const STORAGE_KEY_FIRST_TIME = '@estimafacil:firstTime';
@@ -82,10 +82,23 @@ export default function ProyectosScreen() {
       // Verificar suscripcion (no bloquear — solo informar)
       const active = await hasActiveSubscription(userId);
       if (!active) {
+        const subType = await getSubscriptionType(userId);
+        const trialOption = subType === null
+          ? [{
+              text: 'Activar prueba gratuita',
+              onPress: async () => {
+                await activateTrial(userId);
+                router.replace('/(tabs)');
+              },
+            }]
+          : [];
         Alert.alert(
           'Suscripcion requerida',
-          'Tu periodo de prueba ha vencido. Activa tu suscripcion para continuar usando EstimaFacil.',
+          subType === null
+            ? 'No tienes una suscripcion activa. Activa tu prueba gratuita de 15 dias o elige un plan.'
+            : 'Tu periodo de prueba ha vencido. Activa tu suscripcion para continuar usando EstimaFacil.',
           [
+            ...trialOption,
             { text: 'Activar ahora', onPress: () => router.push('/suscripcion') },
             { text: 'Cerrar', style: 'cancel' },
           ],

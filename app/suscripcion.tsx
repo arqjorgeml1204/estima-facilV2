@@ -20,12 +20,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useState, useEffect } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   hasActiveSubscription,
   getDaysRemaining,
   getSubscriptionType,
   getSubscriptionExpiry,
   redeemCode,
+  activateTrial,
 } from '../utils/subscription';
 import { getCurrentUserId } from '../utils/auth';
 import { generateToken } from '../utils/tokenGenerator';
@@ -84,6 +86,8 @@ export default function SuscripcionScreen() {
   const [code, setCode]               = useState('');
   const [redeeming, setRedeeming]     = useState(false);
 
+  const [canTrial, setCanTrial]         = useState(false);
+
   // ── Payment modal state ─────────────────────────────────────────────────
   const [modalStep, setModalStep]       = useState<ModalStep>('none');
   const [selectedPlan, setSelectedPlan] = useState<PlanType>('monthly');
@@ -94,6 +98,17 @@ export default function SuscripcionScreen() {
 
   useEffect(() => {
     loadSubscriptionStatus();
+    // Verificar si el usuario puede hacer trial
+    const checkTrial = async () => {
+      try {
+        const stored = await AsyncStorage.getItem('@estimafacil:user_id');
+        if (stored) {
+          const subType = await getSubscriptionType(stored);
+          setCanTrial(subType === null);
+        }
+      } catch (_) {}
+    };
+    checkTrial();
   }, []);
 
   const loadSubscriptionStatus = async () => {
@@ -114,6 +129,19 @@ export default function SuscripcionScreen() {
     setDaysLeft(days);
     setSubType(type);
     setExpiryDate(expires);
+  };
+
+  const handleActivateTrial = async () => {
+    try {
+      const stored = await AsyncStorage.getItem('@estimafacil:user_id');
+      if (!stored) return;
+      await activateTrial(stored);
+      Alert.alert('¡Prueba activada!', 'Tienes 15 días de acceso gratuito a EstimaFácil®.', [
+        { text: 'Comenzar', onPress: () => router.replace('/(tabs)') }
+      ]);
+    } catch (e) {
+      Alert.alert('Error', 'No se pudo activar la prueba. Intenta de nuevo.');
+    }
   };
 
   const formatDate = (iso: string | null): string => {
@@ -393,6 +421,29 @@ export default function SuscripcionScreen() {
             )}
           </TouchableOpacity>
         </View>
+
+        {/* Prueba gratuita — solo si nunca tuvo suscripcion */}
+        {canTrial && (
+          <TouchableOpacity
+            onPress={handleActivateTrial}
+            style={{
+              borderWidth: 2,
+              borderColor: '#003d9b',
+              backgroundColor: '#fff',
+              borderRadius: 12,
+              padding: 16,
+              marginBottom: 16,
+              alignItems: 'center',
+            }}
+          >
+            <Text style={{ color: '#003d9b', fontWeight: 'bold', fontSize: 16 }}>
+              PRUEBA GRATUITA — 15 DÍAS
+            </Text>
+            <Text style={{ color: '#666', fontSize: 12, marginTop: 4 }}>
+              Sin costo · Sin compromiso · Solo por primera vez
+            </Text>
+          </TouchableOpacity>
+        )}
 
         {/* Planes disponibles */}
         <View style={{
