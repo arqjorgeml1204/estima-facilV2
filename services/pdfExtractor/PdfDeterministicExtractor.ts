@@ -191,7 +191,7 @@ export class PdfDeterministicExtractor {
         context.headerBuffer += ' ' + line;
 
         // Detect transition to alcance detallado section
-        if (/alcance\s+detallado\s+de\s+contrato/i.test(line)) {
+        if (/alcance\s+detallado\s+de[l]?\s+contrato/i.test(line)) {
           return ParserState.ESPERANDO_ALCANCE_DETALLADO;
         }
 

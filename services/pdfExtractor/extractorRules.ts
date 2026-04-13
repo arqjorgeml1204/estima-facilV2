@@ -63,8 +63,8 @@ function cleanCandidateContratista(raw: string): string {
 export function extractContratista(text: string): string | null {
   if (!text) return null;
 
-  // Pattern 0: "Contratista:" seguido del nombre hasta keyword conocido o porcentaje
-  const p0 = text.match(/[Cc]ontratista\s*:\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s.,]+?)(?=\s*\d+\s*%|\s*[Ff]ondo|\s*[Mm]onto|\s*[Pp]rototipo|$)/);
+  // Pattern 0: Hermes-safe — sin lookahead
+  const p0 = text.match(/[Cc]ontratista\s*:\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s.,]+?)(?:\s*\d+\s*%|\s*[Ff]ondo|\s*[Mm]onto|\s*[Pp]rototipo)/i);
   if (p0) {
     const candidate = cleanCandidateContratista(collapseLine(p0[1]));
     if (candidate && candidate.length >= 3 && !/JAVER/i.test(candidate)) {
