@@ -341,8 +341,8 @@ export class PdfDeterministicExtractor {
     }
 
     // Fallback for numeroContrato / monto from header if alcance missed them
-    const numeroContrato = context.numeroContrato
-      || extractNumeroContrato(context.headerBuffer)
+    const numeroContrato = (context.numeroContrato
+      || extractNumeroContrato(context.headerBuffer))
       ?? `CONT-${Date.now()}`;
     const montoContrato = context.montoContrato
       ?? extractMonto(context.headerBuffer);
