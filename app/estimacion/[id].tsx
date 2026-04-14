@@ -12,7 +12,7 @@
  */
 
 import {
-  View, Text, TouchableOpacity, ScrollView, SectionList,
+  View, Text, TouchableOpacity, ScrollView, FlatList,
   ActivityIndicator, Modal, TextInput, Alert,
   Platform,
 } from 'react-native';
@@ -870,16 +870,27 @@ export default function EstimacionGrid() {
     });
   }, [soloDisponibles, conceptos, detalles, priorData]);
 
-  // ── Agrupar por paquete ───────────────────────────────────────────────────────
-  const paquetes: { nombre: string; conceptos: Concepto[] }[] = [];
-  let lastPaq = '';
-  for (const c of conceptosFiltrados) {
-    if (c.paquete !== lastPaq) {
-      paquetes.push({ nombre: c.paquete, conceptos: [] });
-      lastPaq = c.paquete;
+  // ── Lista plana: headers de paquete + conceptos intercalados ─────────────────
+  // Esto permite que un SOLO FlatList (sin ScrollView padre) virtualice todo.
+  type FlatItem =
+    | { type: 'header'; nombre: string; key: string }
+    | { type: 'concepto'; data: Concepto; idx: number; key: string };
+
+  const flatItems = useMemo(() => {
+    const items: FlatItem[] = [];
+    let lastPaq = '';
+    let idxInPaq = 0;
+    for (const c of conceptosFiltrados) {
+      if (c.paquete !== lastPaq) {
+        items.push({ type: 'header', nombre: c.paquete, key: `hdr-${c.paquete}` });
+        lastPaq = c.paquete;
+        idxInPaq = 0;
+      }
+      items.push({ type: 'concepto', data: c, idx: idxInPaq, key: `c-${c.id}` });
+      idxInPaq++;
     }
-    paquetes[paquetes.length - 1].conceptos.push(c);
-  }
+    return items;
+  }, [conceptosFiltrados]);
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
@@ -1126,64 +1137,68 @@ export default function EstimacionGrid() {
           </View>
         </View>
 
-        {/* ScrollView horizontal ÚNICO que envuelve toda la grid */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={true} style={{ flex: 1 }}>
-          <View style={{ width: COL_W + CELL_W * colCount }}>
-            {/* Header de columnas — sticky */}
-            <View style={{ flexDirection: 'row', backgroundColor: 'rgba(231,232,234,0.5)' }}>
-              <View style={{
-                width: COL_W, paddingVertical: 10, paddingHorizontal: 12,
-                borderRightWidth: 1, borderRightColor: 'rgba(195,198,214,0.1)',
-              }}>
-                <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase', letterSpacing: 1 }}>
-                  Concepto
-                </Text>
-              </View>
-              {Array.from({ length: colCount }, (_, i) => (
-                <View key={i} style={{ width: CELL_W, paddingVertical: 10, alignItems: 'center' }}>
-                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase' }}>
-                    {i + 1}
+        {/* FlatList como componente RAÍZ de scroll (NO dentro de ScrollView).
+            Lista plana: headers de paquete + conceptos mezclados.
+            Cada fila maneja su propio scroll horizontal. */}
+        <FlatList
+          data={flatItems}
+          keyExtractor={(item) => item.key}
+          initialNumToRender={8}
+          maxToRenderPerBatch={6}
+          updateCellsBatchingPeriod={30}
+          windowSize={5}
+          removeClippedSubviews={Platform.OS === 'android'}
+          getItemLayout={(_, index) => ({
+            length: ROW_HEIGHT,
+            offset: ROW_HEIGHT * index,
+            index,
+          })}
+          stickyHeaderIndices={[0]}
+          ListHeaderComponent={
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={{ flexDirection: 'row', backgroundColor: 'rgba(231,232,234,0.95)' }}>
+                <View style={{
+                  width: COL_W, paddingVertical: 10, paddingHorizontal: 12,
+                  borderRightWidth: 1, borderRightColor: 'rgba(195,198,214,0.1)',
+                }}>
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase', letterSpacing: 1 }}>
+                    Concepto
                   </Text>
                 </View>
-              ))}
-            </View>
-
-            {/* SectionList: virtualiza conceptos individualmente */}
-            <SectionList
-              sections={paquetes.map(p => ({ title: p.nombre, data: p.conceptos }))}
-              keyExtractor={(item) => String(item.id)}
-              initialNumToRender={10}
-              maxToRenderPerBatch={8}
-              updateCellsBatchingPeriod={30}
-              windowSize={5}
-              removeClippedSubviews={true}
-              scrollEnabled={true}
-              nestedScrollEnabled={true}
-              getItemLayout={(_, index) => ({
-                length: ROW_HEIGHT,
-                offset: ROW_HEIGHT * index,
-                index,
-              })}
-              renderSectionHeader={({ section }) => (
+                {Array.from({ length: colCount }, (_, i) => (
+                  <View key={i} style={{ width: CELL_W, paddingVertical: 10, alignItems: 'center' }}>
+                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase' }}>
+                      {i + 1}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+          }
+          renderItem={({ item }) => {
+            if (item.type === 'header') {
+              return (
                 <View style={{
                   paddingHorizontal: 12, paddingVertical: 5,
                   backgroundColor: 'rgba(0,61,155,0.06)',
                   borderTopWidth: 1, borderBottomWidth: 1,
                   borderColor: 'rgba(195,198,214,0.2)',
-                  width: COL_W + CELL_W * colCount,
                 }}>
                   <Text style={{ fontSize: 9, fontWeight: '800', color: '#003d9b', textTransform: 'uppercase', letterSpacing: 1 }}>
-                    {section.title}
+                    {item.nombre}
                   </Text>
                 </View>
-              )}
-              renderItem={({ item: concepto, index: idx }) => (
+              );
+            }
+            const concepto = item.data;
+            return (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 <ConceptoRow
                   concepto={concepto}
                   detalle={detalles[concepto.id]}
                   priorLocked={priorData[concepto.id]?.cantidad ?? 0}
                   priorSemana={priorData[concepto.id]?.semana ?? 0}
-                  isEvenRow={idx % 2 === 0}
+                  isEvenRow={item.idx % 2 === 0}
                   colCount={colCount}
                   cellW={CELL_W}
                   colW={COL_W}
@@ -1195,32 +1210,31 @@ export default function EstimacionGrid() {
                   onMarcarTodo={handleMarcarTodo}
                   onDesmarcarTodo={handleDesmarcarTodo}
                 />
-              )}
-              ListFooterComponent={
-                <TouchableOpacity
-                  style={{
-                    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-                    paddingHorizontal: 14, paddingVertical: 12,
-                    backgroundColor: 'rgba(231,232,234,0.4)',
-                    borderTopWidth: 1, borderTopColor: 'rgba(195,198,214,0.15)',
-                    width: COL_W + CELL_W * colCount,
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase', letterSpacing: 1 }}>
-                    Total Estimado
-                  </Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Text style={{ fontSize: 14, fontWeight: '800', color: '#003d9b' }}>
-                      ${totales.subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
-                    </Text>
-                    <MaterialIcons name="chevron-right" size={16} color="#737685" />
-                  </View>
-                </TouchableOpacity>
-              }
-            />
-          </View>
-        </ScrollView>
+              </ScrollView>
+            );
+          }}
+          ListFooterComponent={
+            <TouchableOpacity
+              style={{
+                flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+                paddingHorizontal: 14, paddingVertical: 12,
+                backgroundColor: 'rgba(231,232,234,0.4)',
+                borderTopWidth: 1, borderTopColor: 'rgba(195,198,214,0.15)',
+              }}
+              activeOpacity={0.7}
+            >
+              <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase', letterSpacing: 1 }}>
+                Total Estimado
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: '#003d9b' }}>
+                  ${totales.subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                </Text>
+                <MaterialIcons name="chevron-right" size={16} color="#737685" />
+              </View>
+            </TouchableOpacity>
+          }
+        />
       </View>
 
       {/* ── Botones Evidencia / Croquis (modo normal) ── */}

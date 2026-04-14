@@ -14,7 +14,7 @@ import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { activateTrial } from '../../utils/subscription';
 import { sendWelcomeEmail, sendNewUserNotification } from '../../utils/emailjs';
-import { generateSalt, hashPassword } from '../../utils/auth';
+import { generateSalt, hashPassword, registerUserRemote } from '../../utils/auth';
 import { createUsuario, getUsuarioByUserId, initDatabase } from '../../db/database';
 
 // TODO: Integrar con auth real cuando se implemente backend
@@ -91,9 +91,13 @@ export default function RegisterScreen() {
       const salt = generateSalt();
       const passwordHash = await hashPassword(password, salt);
 
-      // Guardar en SQLite
+      // Guardar en SQLite (cache local)
       await createUsuario(userId, nombre.trim(), passwordHash, salt);
-      console.log('[REGISTER] usuario creado:', userId);
+      console.log('[REGISTER] usuario creado en SQLite:', userId);
+
+      // Guardar en Supabase (persiste entre instalaciones — fire and forget)
+      registerUserRemote(userId, nombre.trim(), passwordHash, salt);
+      console.log('[REGISTER] usuario enviado a Supabase:', userId);
 
       // Guardar sesión en AsyncStorage
       await AsyncStorage.setItem(

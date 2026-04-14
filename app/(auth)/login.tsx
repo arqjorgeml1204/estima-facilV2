@@ -12,8 +12,8 @@ import {
 import { useState, useEffect } from 'react';
 import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { hashPassword } from '../../utils/auth';
-import { getUsuarioByUserId, initDatabase, getDb } from '../../db/database';
+import { hashPassword, getUserRemote, registerUserRemote } from '../../utils/auth';
+import { getUsuarioByUserId, createUsuario, initDatabase, getDb } from '../../db/database';
 
 const STORAGE_KEY_EMAIL    = '@estimafacil:email';
 const STORAGE_KEY_REMEMBER = '@estimafacil:remember';
@@ -93,21 +93,27 @@ export default function LoginScreen() {
         ? input.toLowerCase()
         : `tel:${input.replace(/[^0-9]/g, '')}`;
 
-      // VERIFICACIÓN REAL DE CREDENCIALES
+      // VERIFICACIÓN DE CREDENCIALES: SQLite local → Supabase remoto (fallback)
       await initDatabase();
-      // Debug: verificar tabla usuarios
-      try {
-        const db = getDb();
-        const tableCheck = await db.getFirstAsync<{count:number}>(
-          "SELECT COUNT(*) as count FROM sqlite_master WHERE type='table' AND name='usuarios'"
-        );
-        console.log('[AUTH] tabla usuarios existe:', tableCheck?.count);
-        const userCount = await db.getFirstAsync<{count:number}>("SELECT COUNT(*) as count FROM usuarios");
-        console.log('[AUTH] total usuarios registrados:', userCount?.count);
-      } catch (e) {
-        console.log('[AUTH] error verificando tabla:', e);
+
+      let usuario = await getUsuarioByUserId(userId);
+
+      // Si no existe en SQLite local, buscar en Supabase (reinstalación)
+      if (!usuario) {
+        console.log('[AUTH] No encontrado en SQLite, buscando en Supabase...');
+        const remoteUser = await getUserRemote(userId);
+        if (remoteUser) {
+          // Restaurar usuario en SQLite local
+          console.log('[AUTH] Encontrado en Supabase, restaurando en SQLite...');
+          try {
+            await createUsuario(remoteUser.user_id, remoteUser.nombre, remoteUser.password_hash, remoteUser.salt);
+          } catch (_) {
+            // Ya podría existir si hubo race condition
+          }
+          usuario = remoteUser;
+        }
       }
-      const usuario = await getUsuarioByUserId(userId);
+
       if (!usuario) {
         setError('No existe cuenta con este correo/teléfono. Regístrate primero.');
         setLoading(false);
