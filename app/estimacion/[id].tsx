@@ -12,7 +12,7 @@
  */
 
 import {
-  View, Text, TouchableOpacity, ScrollView, FlatList,
+  View, Text, TouchableOpacity, ScrollView, SectionList,
   ActivityIndicator, Modal, TextInput, Alert,
   Platform,
 } from 'react-native';
@@ -1126,120 +1126,101 @@ export default function EstimacionGrid() {
           </View>
         </View>
 
-        <FlatList
-          data={paquetes}
-          keyExtractor={(paq) => paq.nombre}
-          initialNumToRender={5}
-          maxToRenderPerBatch={10}
-          updateCellsBatchingPeriod={50}
-          removeClippedSubviews={true}
-          scrollEnabled={true}
-          nestedScrollEnabled={true}
-          renderItem={({ item: paq, index: paqIdx }) => (
-            <View key={paq.nombre}>
-              {/* Separador de paquete */}
+        {/* ScrollView horizontal ÚNICO que envuelve toda la grid */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={true} style={{ flex: 1 }}>
+          <View style={{ width: COL_W + CELL_W * colCount }}>
+            {/* Header de columnas — sticky */}
+            <View style={{ flexDirection: 'row', backgroundColor: 'rgba(231,232,234,0.5)' }}>
               <View style={{
-                paddingHorizontal: 12, paddingVertical: 5,
-                backgroundColor: 'rgba(0,61,155,0.06)',
-                borderTopWidth: 1, borderBottomWidth: 1,
-                borderColor: 'rgba(195,198,214,0.2)',
+                width: COL_W, paddingVertical: 10, paddingHorizontal: 12,
+                borderRightWidth: 1, borderRightColor: 'rgba(195,198,214,0.1)',
               }}>
-                <Text style={{ fontSize: 9, fontWeight: '800', color: '#003d9b', textTransform: 'uppercase', letterSpacing: 1 }}>
-                  {paq.nombre}
+                <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase', letterSpacing: 1 }}>
+                  Concepto
                 </Text>
               </View>
-
-              {/* Filas de conceptos — con scroll horizontal */}
-              {paq.conceptos.map((concepto, idx) => (
-                <ScrollView
-                  key={`${paq.nombre}-${concepto.id}`}
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  scrollEventThrottle={16}
-                >
-                  {paqIdx === 0 && idx === 0 && (
-                    <View style={{ flexDirection: 'row', backgroundColor: 'rgba(231,232,234,0.5)' }}>
-                      <View style={{
-                        width: COL_W, paddingVertical: 10, paddingHorizontal: 12,
-                        borderRightWidth: 1, borderRightColor: 'rgba(195,198,214,0.1)',
-                      }}>
-                        <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase', letterSpacing: 1 }}>
-                          Concepto
-                        </Text>
-                      </View>
-                      {Array.from({ length: colCount }, (_, i) => (
-                        <View key={i} style={{ width: CELL_W, paddingVertical: 10, alignItems: 'center' }}>
-                          <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase' }}>
-                            {i + 1}
-                          </Text>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-                  <ConceptoRow
-                    concepto={concepto}
-                    detalle={detalles[concepto.id]}
-                    priorLocked={priorData[concepto.id]?.cantidad ?? 0}
-                    priorSemana={priorData[concepto.id]?.semana ?? 0}
-                    isEvenRow={idx % 2 === 0}
-                    colCount={colCount}
-                    cellW={CELL_W}
-                    colW={COL_W}
-                    modoActualizacion={modoActualizacion}
-                    isViewMode={isViewMode}
-                    currentWeek={currentWeek}
-                    onCellTap={handleCellTap}
-                    onLongPress={handleLongPress}
-                    onMarcarTodo={handleMarcarTodo}
-                    onDesmarcarTodo={handleDesmarcarTodo}
-                  />
-                </ScrollView>
-              ))}
-            </View>
-          )}
-          ListHeaderComponent={
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View style={{ flexDirection: 'row', backgroundColor: 'rgba(231,232,234,0.5)' }}>
-                <View style={{
-                  width: COL_W, paddingVertical: 10, paddingHorizontal: 12,
-                  borderRightWidth: 1, borderRightColor: 'rgba(195,198,214,0.1)',
-                }}>
-                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase', letterSpacing: 1 }}>
-                    Concepto
+              {Array.from({ length: colCount }, (_, i) => (
+                <View key={i} style={{ width: CELL_W, paddingVertical: 10, alignItems: 'center' }}>
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase' }}>
+                    {i + 1}
                   </Text>
                 </View>
-                {Array.from({ length: colCount }, (_, i) => (
-                  <View key={i} style={{ width: CELL_W, paddingVertical: 10, alignItems: 'center' }}>
-                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase' }}>
-                      {i + 1}
+              ))}
+            </View>
+
+            {/* SectionList: virtualiza conceptos individualmente */}
+            <SectionList
+              sections={paquetes.map(p => ({ title: p.nombre, data: p.conceptos }))}
+              keyExtractor={(item) => String(item.id)}
+              initialNumToRender={10}
+              maxToRenderPerBatch={8}
+              updateCellsBatchingPeriod={30}
+              windowSize={5}
+              removeClippedSubviews={true}
+              scrollEnabled={true}
+              nestedScrollEnabled={true}
+              getItemLayout={(_, index) => ({
+                length: ROW_HEIGHT,
+                offset: ROW_HEIGHT * index,
+                index,
+              })}
+              renderSectionHeader={({ section }) => (
+                <View style={{
+                  paddingHorizontal: 12, paddingVertical: 5,
+                  backgroundColor: 'rgba(0,61,155,0.06)',
+                  borderTopWidth: 1, borderBottomWidth: 1,
+                  borderColor: 'rgba(195,198,214,0.2)',
+                  width: COL_W + CELL_W * colCount,
+                }}>
+                  <Text style={{ fontSize: 9, fontWeight: '800', color: '#003d9b', textTransform: 'uppercase', letterSpacing: 1 }}>
+                    {section.title}
+                  </Text>
+                </View>
+              )}
+              renderItem={({ item: concepto, index: idx }) => (
+                <ConceptoRow
+                  concepto={concepto}
+                  detalle={detalles[concepto.id]}
+                  priorLocked={priorData[concepto.id]?.cantidad ?? 0}
+                  priorSemana={priorData[concepto.id]?.semana ?? 0}
+                  isEvenRow={idx % 2 === 0}
+                  colCount={colCount}
+                  cellW={CELL_W}
+                  colW={COL_W}
+                  modoActualizacion={modoActualizacion}
+                  isViewMode={isViewMode}
+                  currentWeek={currentWeek}
+                  onCellTap={handleCellTap}
+                  onLongPress={handleLongPress}
+                  onMarcarTodo={handleMarcarTodo}
+                  onDesmarcarTodo={handleDesmarcarTodo}
+                />
+              )}
+              ListFooterComponent={
+                <TouchableOpacity
+                  style={{
+                    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+                    paddingHorizontal: 14, paddingVertical: 12,
+                    backgroundColor: 'rgba(231,232,234,0.4)',
+                    borderTopWidth: 1, borderTopColor: 'rgba(195,198,214,0.15)',
+                    width: COL_W + CELL_W * colCount,
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase', letterSpacing: 1 }}>
+                    Total Estimado
+                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '800', color: '#003d9b' }}>
+                      ${totales.subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
                     </Text>
+                    <MaterialIcons name="chevron-right" size={16} color="#737685" />
                   </View>
-                ))}
-              </View>
-            </ScrollView>
-          }
-          ListFooterComponent={
-            <TouchableOpacity
-              style={{
-                flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-                paddingHorizontal: 14, paddingVertical: 12,
-                backgroundColor: 'rgba(231,232,234,0.4)',
-                borderTopWidth: 1, borderTopColor: 'rgba(195,198,214,0.15)',
-              }}
-              activeOpacity={0.7}
-            >
-              <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase', letterSpacing: 1 }}>
-                Total Estimado
-              </Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Text style={{ fontSize: 14, fontWeight: '800', color: '#003d9b' }}>
-                  ${totales.subtotal.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
-                </Text>
-                <MaterialIcons name="chevron-right" size={16} color="#737685" />
-              </View>
-            </TouchableOpacity>
-          }
-        />
+                </TouchableOpacity>
+              }
+            />
+          </View>
+        </ScrollView>
       </View>
 
       {/* ── Botones Evidencia / Croquis (modo normal) ── */}
