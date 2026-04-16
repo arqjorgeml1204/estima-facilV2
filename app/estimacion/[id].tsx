@@ -845,23 +845,8 @@ export default function EstimacionGrid() {
     Alert.alert('Guardado', 'La estimación fue guardada correctamente.');
   }, [conceptos, priorData, detalles, estId]);
 
-  // ── Loading ──────────────────────────────────────────────────────────────────
-  if (loading) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#f8f9fb', justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#003d9b" />
-      </View>
-    );
-  }
-
-  const totalUnidades = proyecto?.total_unidades ?? 1;
-
-  // ── Columnas: unidades 1…N ───────────────────────────────────────────────────
-  const colCount = Math.min(totalUnidades, 20);
-  const CELL_W = 42;
-  const COL_W = 170;
-
   // ── Filtrar conceptos (Task 8b) ────────────────────────────────────────────────
+  // IMPORTANT: useMemo MUST be called before any early return (Rules of Hooks).
   const conceptosFiltrados = useMemo(() => {
     if (!soloDisponibles) return conceptos;
     return conceptos.filter(c => {
@@ -872,6 +857,7 @@ export default function EstimacionGrid() {
 
   // ── Lista plana: headers de paquete + conceptos intercalados ─────────────────
   // Esto permite que un SOLO FlatList (sin ScrollView padre) virtualice todo.
+  // IMPORTANT: useMemo MUST be called before any early return (Rules of Hooks).
   type FlatItem =
     | { type: 'header'; nombre: string; key: string }
     | { type: 'concepto'; data: Concepto; idx: number; key: string };
@@ -891,6 +877,22 @@ export default function EstimacionGrid() {
     }
     return items;
   }, [conceptosFiltrados]);
+
+  // ── Loading ──────────────────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#f8f9fb', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#003d9b" />
+      </View>
+    );
+  }
+
+  const totalUnidades = proyecto?.total_unidades ?? 1;
+
+  // ── Columnas: unidades 1…N ───────────────────────────────────────────────────
+  const colCount = Math.min(totalUnidades, 20);
+  const CELL_W = 42;
+  const COL_W = 170;
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
@@ -1148,12 +1150,6 @@ export default function EstimacionGrid() {
           updateCellsBatchingPeriod={30}
           windowSize={5}
           removeClippedSubviews={Platform.OS === 'android'}
-          getItemLayout={(_, index) => ({
-            length: ROW_HEIGHT,
-            offset: ROW_HEIGHT * index,
-            index,
-          })}
-          stickyHeaderIndices={[0]}
           ListHeaderComponent={
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View style={{ flexDirection: 'row', backgroundColor: 'rgba(231,232,234,0.95)' }}>

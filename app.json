@@ -33,7 +33,19 @@
     "plugins": [
       "expo-router",
       "expo-sqlite",
-      ["expo-document-picker", { "iCloudContainerEnvironment": "Production" }]
-    ]
+      [
+        "expo-document-picker",
+        {
+          "iCloudContainerEnvironment": "Production"
+        }
+      ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "31e1d3c5-fa0f-4e7c-96c4-27565587317e"
+      }
+    },
+    "owner": "jorgeml"
   }
 }
