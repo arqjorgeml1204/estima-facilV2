@@ -370,18 +370,92 @@ export async function deleteCroquis(id: number) {
 // ─── Total Estimado por Proyecto ──────────────────────────────────────────────
 
 /**
- * Calcula el total estimado acumulado de un proyecto
- * (suma de todos los importe_esta_est de todas sus estimaciones).
+ * Calcula el total estimado acumulado de un proyecto.
+ * Suma TANTO el periodo actual (importe_esta_est) COMO las cantidades
+ * registradas en Modo Actualización (importe_anterior), ya que ambas
+ * representan obra cobrada/por cobrar que consume el monto del contrato.
+ *
+ * Para evitar doble conteo: cantidad_anterior en una estimación N debería
+ * reflejar la suma de cantidad_esta_est en estimaciones < N. Pero cuando
+ * el usuario usa Modo Actualización, agrega cantidad_anterior sin que
+ * exista una estimación previa que la aporte en cantidad_esta_est.
+ *
+ * Estrategia: por cada concepto, tomamos MAX(cantidad_acumulada) entre
+ * todas sus estimaciones. Eso representa el total de obra avanzada.
  */
 export async function getTotalEstimadoPorProyecto(proyectoId: number): Promise<number> {
   const result = await getDb().getFirstAsync<{ total: number }>(
-    `SELECT COALESCE(SUM(de.importe_esta_est), 0) as total
-     FROM detalle_estimacion de
-     JOIN estimacion e ON de.estimacion_id = e.id
-     WHERE e.proyecto_id = ?`,
+    `SELECT COALESCE(SUM(max_importe), 0) as total
+     FROM (
+       SELECT MAX(de.importe_acumulado) as max_importe
+       FROM detalle_estimacion de
+       JOIN estimacion e ON de.estimacion_id = e.id
+       WHERE e.proyecto_id = ?
+       GROUP BY de.concepto_id
+     )`,
     [proyectoId]
   );
   return result?.total ?? 0;
+}
+
+/**
+ * Calcula el "Estimado Acumulado" del proyecto EXCLUYENDO la estimación actual.
+ * Representa todo lo que ya se había estimado/cobrado antes del periodo actual.
+ *
+ * Por cada concepto:
+ *   - Si existe en otras estimaciones: usa MAX(cantidad_acumulada) de esas otras
+ *     (esto cubre cantidad_anterior de modo actualización aplicado en estimaciones previas).
+ *   - Si solo existe en la estimación actual: usa cantidad_anterior de la actual
+ *     (modo actualización registrado directamente en la estimación actual).
+ */
+export async function getEstimadoAcumuladoPrevio(
+  proyectoId: number,
+  estimacionActualId: number
+): Promise<number> {
+  const database = getDb();
+
+  // Por concepto: MAX(cantidad_acumulada) en estimaciones distintas a la actual,
+  // multiplicado por costo_unitario del concepto.
+  const otrasRows = await database.getAllAsync<{
+    concepto_id: number;
+    max_acum: number;
+    costo_unitario: number;
+  }>(
+    `SELECT d.concepto_id,
+            MAX(d.cantidad_acumulada) as max_acum,
+            c.costo_unitario as costo_unitario
+     FROM detalle_estimacion d
+     JOIN estimacion e ON e.id = d.estimacion_id
+     JOIN concepto c ON c.id = d.concepto_id
+     WHERE e.proyecto_id = ? AND e.id != ?
+     GROUP BY d.concepto_id, c.costo_unitario`,
+    [proyectoId, estimacionActualId]
+  );
+
+  const conceptoIdsEnOtras = new Set(otrasRows.map(r => r.concepto_id));
+  let acumulado = 0;
+  for (const r of otrasRows) {
+    acumulado += (r.max_acum || 0) * (r.costo_unitario || 0);
+  }
+
+  // Conceptos que solo aparecen en la estimación actual (modo actualización puro)
+  const actualRows = await database.getAllAsync<{
+    concepto_id: number;
+    importe_anterior: number;
+  }>(
+    `SELECT d.concepto_id, d.importe_anterior
+     FROM detalle_estimacion d
+     WHERE d.estimacion_id = ?`,
+    [estimacionActualId]
+  );
+
+  for (const r of actualRows) {
+    if (!conceptoIdsEnOtras.has(r.concepto_id)) {
+      acumulado += r.importe_anterior || 0;
+    }
+  }
+
+  return acumulado;
 }
 
 // ─── Totales ──────────────────────────────────────────────────────────────────

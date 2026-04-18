@@ -121,12 +121,16 @@ interface ConceptoRowProps {
   onLongPress: (concepto: Concepto) => void;
   onMarcarTodo: (concepto: Concepto) => void;
   onDesmarcarTodo: (concepto: Concepto) => void;
+  rowKey: string;
+  registerScrollRef: (key: string, ref: any) => void;
+  onHorizontalScroll: (x: number, selfKey: string) => void;
 }
 
 const ConceptoRow = React.memo(function ConceptoRow({
   concepto, detalle, priorLocked, priorSemana, isEvenRow,
   colCount, cellW, colW, modoActualizacion, isViewMode, currentWeek,
   onCellTap, onLongPress, onMarcarTodo, onDesmarcarTodo,
+  rowKey, registerScrollRef, onHorizontalScroll,
 }: ConceptoRowProps) {
   const modeActAdditions = detalle?.cantidad_anterior ?? 0;
   const effectiveAnterior = priorLocked + modeActAdditions;
@@ -186,9 +190,9 @@ const ConceptoRow = React.memo(function ConceptoRow({
         </Text>
         <Text style={{
           fontSize: 10, fontWeight: '700', marginTop: 2,
-          color: effectiveAnterior >= concepto.factor ? '#004f11' : effectiveAnterior > 0 ? '#003d9b' : '#737685',
+          color: (effectiveAnterior + cantEsta) >= concepto.factor ? '#004f11' : (effectiveAnterior + cantEsta) > 0 ? '#003d9b' : '#737685',
         }}>
-          {effectiveAnterior}/{concepto.factor}
+          {effectiveAnterior + cantEsta}/{concepto.factor}
         </Text>
         {priorLocked > 0 && !modoActualizacion && (
           <Text style={{ fontSize: 8, fontWeight: '600', color: '#737685', marginTop: 1 }}>
@@ -202,31 +206,41 @@ const ConceptoRow = React.memo(function ConceptoRow({
         )}
       </View>
 
-      {/* Celdas interactivas */}
-      {Array.from({ length: colCount }, (_, colIdx) => {
-        const { bg, text, blocked, badgeText } = getCellVisual(colIdx);
-        return (
-          <TouchableOpacity
-            key={colIdx}
-            style={[cellOuterStyle, { width: cellW }]}
-            onPress={() => onCellTap(concepto, colIdx)}
-            onLongPress={() => onLongPress(concepto)}
-            delayLongPress={500}
-            activeOpacity={blocked ? 1 : 0.7}
-          >
-            <View style={[cellInnerBase, { width: cellW - 8, aspectRatio: 1, backgroundColor: bg }]}>
-              {text !== null && (
-                <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>{text}</Text>
-              )}
-              {badgeText !== null && (
-                <View style={{ position: 'absolute', top: 1, right: 1, backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 2, paddingHorizontal: 2, paddingVertical: 0.5 }}>
-                  <Text style={{ color: '#ffffff', fontSize: 6, fontWeight: '700' }}>{badgeText}</Text>
+      {/* Celdas interactivas - ScrollView horizontal sincronizado con header y otras filas */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        ref={(ref) => registerScrollRef(rowKey, ref)}
+        onScroll={(e) => onHorizontalScroll(e.nativeEvent.contentOffset.x, rowKey)}
+        scrollEventThrottle={16}
+      >
+        <View style={{ flexDirection: 'row' }}>
+          {Array.from({ length: colCount }, (_, colIdx) => {
+            const { bg, text, blocked, badgeText } = getCellVisual(colIdx);
+            return (
+              <TouchableOpacity
+                key={colIdx}
+                style={[cellOuterStyle, { width: cellW }]}
+                onPress={() => onCellTap(concepto, colIdx)}
+                onLongPress={() => onLongPress(concepto)}
+                delayLongPress={500}
+                activeOpacity={blocked ? 1 : 0.7}
+              >
+                <View style={[cellInnerBase, { width: cellW - 8, aspectRatio: 1, backgroundColor: bg }]}>
+                  {text !== null && (
+                    <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '800' }}>{text}</Text>
+                  )}
+                  {badgeText !== null && (
+                    <View style={{ position: 'absolute', top: 1, right: 1, backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 2, paddingHorizontal: 2, paddingVertical: 0.5 }}>
+                      <Text style={{ color: '#ffffff', fontSize: 6, fontWeight: '700' }}>{badgeText}</Text>
+                    </View>
+                  )}
                 </View>
-              )}
-            </View>
-          </TouchableOpacity>
-        );
-      })}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </ScrollView>
     </View>
   );
 }, (prev, next) => {
@@ -845,6 +859,34 @@ export default function EstimacionGrid() {
     Alert.alert('Guardado', 'La estimación fue guardada correctamente.');
   }, [conceptos, priorData, detalles, estId]);
 
+  // ── Scroll horizontal sincronizado del grid ─────────────────────────────────
+  // Todas las filas + el header comparten un mismo offset horizontal, sincronizado
+  // imperativamente vía refs (sin re-renders).
+  const gridScrollRefs = useRef<Map<string, any>>(new Map());
+  const lastScrollX = useRef(0);
+
+  const registerScrollRef = useCallback((key: string, ref: any) => {
+    if (ref) {
+      gridScrollRefs.current.set(key, ref);
+      // Al montarse una nueva fila (post virtualización), sincronizar al offset actual
+      if (lastScrollX.current > 0) {
+        ref.scrollTo({ x: lastScrollX.current, animated: false });
+      }
+    } else {
+      // Callback ref con null = unmount
+      gridScrollRefs.current.delete(key);
+    }
+  }, []);
+
+  const handleHorizontalScroll = useCallback((x: number, selfKey: string) => {
+    lastScrollX.current = x;
+    gridScrollRefs.current.forEach((ref, key) => {
+      if (key !== selfKey && ref) {
+        ref.scrollTo({ x, animated: false });
+      }
+    });
+  }, []);
+
   // ── Filtrar conceptos (Task 8b) ────────────────────────────────────────────────
   // IMPORTANT: useMemo MUST be called before any early return (Rules of Hooks).
   const conceptosFiltrados = useMemo(() => {
@@ -1151,25 +1193,35 @@ export default function EstimacionGrid() {
           windowSize={5}
           removeClippedSubviews={Platform.OS === 'android'}
           ListHeaderComponent={
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              <View style={{ flexDirection: 'row', backgroundColor: 'rgba(231,232,234,0.95)' }}>
-                <View style={{
-                  width: COL_W, paddingVertical: 10, paddingHorizontal: 12,
-                  borderRightWidth: 1, borderRightColor: 'rgba(195,198,214,0.1)',
-                }}>
-                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase', letterSpacing: 1 }}>
-                    Concepto
-                  </Text>
-                </View>
-                {Array.from({ length: colCount }, (_, i) => (
-                  <View key={i} style={{ width: CELL_W, paddingVertical: 10, alignItems: 'center' }}>
-                    <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase' }}>
-                      {i + 1}
-                    </Text>
-                  </View>
-                ))}
+            <View style={{ flexDirection: 'row', backgroundColor: 'rgba(231,232,234,0.95)' }}>
+              {/* Columna Concepto fija (no scrollea horizontal) */}
+              <View style={{
+                width: COL_W, paddingVertical: 10, paddingHorizontal: 12,
+                borderRightWidth: 1, borderRightColor: 'rgba(195,198,214,0.1)',
+              }}>
+                <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase', letterSpacing: 1 }}>
+                  Concepto
+                </Text>
               </View>
-            </ScrollView>
+              {/* Labels 1..N con scroll horizontal sincronizado */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                ref={(ref) => registerScrollRef('__header__', ref)}
+                onScroll={(e) => handleHorizontalScroll(e.nativeEvent.contentOffset.x, '__header__')}
+                scrollEventThrottle={16}
+              >
+                <View style={{ flexDirection: 'row' }}>
+                  {Array.from({ length: colCount }, (_, i) => (
+                    <View key={i} style={{ width: CELL_W, paddingVertical: 10, alignItems: 'center' }}>
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: '#434654', textTransform: 'uppercase' }}>
+                        {i + 1}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </ScrollView>
+            </View>
           }
           renderItem={({ item }) => {
             if (item.type === 'header') {
@@ -1188,25 +1240,26 @@ export default function EstimacionGrid() {
             }
             const concepto = item.data;
             return (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                <ConceptoRow
-                  concepto={concepto}
-                  detalle={detalles[concepto.id]}
-                  priorLocked={priorData[concepto.id]?.cantidad ?? 0}
-                  priorSemana={priorData[concepto.id]?.semana ?? 0}
-                  isEvenRow={item.idx % 2 === 0}
-                  colCount={colCount}
-                  cellW={CELL_W}
-                  colW={COL_W}
-                  modoActualizacion={modoActualizacion}
-                  isViewMode={isViewMode}
-                  currentWeek={currentWeek}
-                  onCellTap={handleCellTap}
-                  onLongPress={handleLongPress}
-                  onMarcarTodo={handleMarcarTodo}
-                  onDesmarcarTodo={handleDesmarcarTodo}
-                />
-              </ScrollView>
+              <ConceptoRow
+                concepto={concepto}
+                detalle={detalles[concepto.id]}
+                priorLocked={priorData[concepto.id]?.cantidad ?? 0}
+                priorSemana={priorData[concepto.id]?.semana ?? 0}
+                isEvenRow={item.idx % 2 === 0}
+                colCount={colCount}
+                cellW={CELL_W}
+                colW={COL_W}
+                modoActualizacion={modoActualizacion}
+                isViewMode={isViewMode}
+                currentWeek={currentWeek}
+                onCellTap={handleCellTap}
+                onLongPress={handleLongPress}
+                onMarcarTodo={handleMarcarTodo}
+                onDesmarcarTodo={handleDesmarcarTodo}
+                rowKey={item.key}
+                registerScrollRef={registerScrollRef}
+                onHorizontalScroll={handleHorizontalScroll}
+              />
             );
           }}
           ListFooterComponent={

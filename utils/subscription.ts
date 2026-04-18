@@ -8,6 +8,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { notifyCanjeo, notifyRevocacion } from './notifyCanjeo';
 
 // ── Configuracion Supabase ─────────────────────────────────────────────────
 // CONFIGURAR ESTOS VALORES DESPUES DE CREAR EL PROYECTO EN SUPABASE
@@ -17,6 +18,7 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 // ── Storage Keys (prefijadas con userId) ──────────────────────────────────
 function keySubExpires(userId: string)   { return `@estimafacil:sub_expires:${userId}`; }
 function keySubType(userId: string)      { return `@estimafacil:sub_type:${userId}`; }
+function keySubCode(userId: string)      { return `@estimafacil:sub_code:${userId}`; }
 function keyTrialStarted(userId: string) { return `@estimafacil:trial_started:${userId}`; }
 
 // ── Consultas locales ──────────────────────────────────────────────────────
@@ -96,8 +98,110 @@ export async function redeemCode(
   expires.setDate(expires.getDate() + codeData.days);
   await AsyncStorage.setItem(keySubExpires(userId), expires.toISOString());
   await AsyncStorage.setItem(keySubType(userId), codeData.type);
+  await AsyncStorage.setItem(keySubCode(userId), code);
+
+  // 4. Notificar al owner via Telegram (fire-and-forget, no bloquea)
+  notifyCanjeo({ code, userId, type: codeData.type, days: codeData.days }).catch(() => {});
 
   return { days: codeData.days, type: codeData.type };
+}
+
+// ── Revocacion de codigos ──────────────────────────────────────────────────
+
+/**
+ * Marca un codigo como revocado en Supabase. El proximo
+ * verifyRevocationAndInvalidate() del usuario afectado limpiara su sub local.
+ */
+export async function revokeCode(code: string): Promise<void> {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/activation_codes?code=eq.${encodeURIComponent(code)}`,
+    {
+      method: 'PATCH',
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=representation',
+      },
+      body: JSON.stringify({
+        is_revoked: true,
+        revoked_at: new Date().toISOString(),
+      }),
+    },
+  );
+
+  if (!res.ok) throw new Error('Error al revocar el codigo.');
+
+  const data = await res.json();
+  const usedBy = (data && data[0] && data[0].used_by) || 'desconocido';
+  notifyRevocacion(code, usedBy).catch(() => {});
+}
+
+/**
+ * Verifica si el codigo activo del usuario fue revocado.
+ * Si si, limpia la suscripcion local y devuelve true.
+ * Llamar al abrir la app o al montar pantallas protegidas.
+ */
+export async function verifyRevocationAndInvalidate(userId: string): Promise<boolean> {
+  const code = await AsyncStorage.getItem(keySubCode(userId));
+  if (!code) return false;
+
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/activation_codes?code=eq.${encodeURIComponent(code)}&select=is_revoked`,
+      {
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+      },
+    );
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (data && data[0] && data[0].is_revoked === true) {
+      await AsyncStorage.removeItem(keySubExpires(userId));
+      await AsyncStorage.removeItem(keySubType(userId));
+      await AsyncStorage.removeItem(keySubCode(userId));
+      return true;
+    }
+  } catch {
+    // Si falla la red, mantener la sub local para no bloquear offline
+  }
+  return false;
+}
+
+/**
+ * Lista todos los codigos canjeados en Supabase (para pantalla admin).
+ */
+export async function listRedeemedCodes(): Promise<Array<{
+  code: string;
+  type: string;
+  days: number;
+  used_by: string;
+  used_at: string;
+  is_revoked: boolean;
+  revoked_at: string | null;
+}>> {
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/activation_codes?is_used=eq.true&select=code,type,days,used_by,used_at,is_revoked,revoked_at&order=used_at.desc`,
+    {
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+    },
+  );
+  if (!res.ok) throw new Error('Error al listar codigos canjeados.');
+  const data = await res.json();
+  return (data || []).map((d: any) => ({
+    code: d.code,
+    type: d.type,
+    days: d.days,
+    used_by: d.used_by ?? '',
+    used_at: d.used_at ?? '',
+    is_revoked: d.is_revoked === true,
+    revoked_at: d.revoked_at ?? null,
+  }));
 }
 
 // ── Trial 15 dias (idempotente) ────────────────────────────────────────────

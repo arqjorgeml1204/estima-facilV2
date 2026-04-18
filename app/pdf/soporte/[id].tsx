@@ -21,7 +21,7 @@ import {
   initDatabase, getEstimacionById, getProyectoById,
   getDetallesByEstimacion, getEmpresa,
   getEvidenciasByEstimacion, getCroquisByEstimacion,
-  getConceptosByProyecto,
+  getConceptosByProyecto, getEstimadoAcumuladoPrevio,
 } from '../../../db/database';
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
@@ -133,6 +133,7 @@ export default function PdfSoporte() {
   const [retencionText, setRetencionText] = useState<string>('5');
   const [evidenciasBase64, setEvidenciasBase64] = useState<Record<string, string>>({});
   const [croquisBase64, setCroquisBase64] = useState<Record<string, string>>({});
+  const [estimadoAcumuladoProyecto, setEstimadoAcumuladoProyecto] = useState<number>(0);
 
   useEffect(() => {
     (async () => {
@@ -153,6 +154,9 @@ export default function PdfSoporte() {
           getCroquisByEstimacion(Number(id)),
         ]);
         const conceptosData = proy ? await getConceptosByProyecto(proy.id) : [];
+        const acumPrevio = proy
+          ? await getEstimadoAcumuladoPrevio(proy.id, Number(id))
+          : 0;
         setEstimacion(est);
         setProyecto(proy);
         setEmpresa(emp);
@@ -160,6 +164,7 @@ export default function PdfSoporte() {
         setConceptos(conceptosData);
         setEvidencias(evs as any[]);
         setCroquisList(cros as any[]);
+        setEstimadoAcumuladoProyecto(acumPrevio);
       } catch (e) {
         console.error('[PdfSoporte] load error:', e);
       } finally {
@@ -265,8 +270,15 @@ export default function PdfSoporte() {
   const localTotal = localSubtotal - localRetencion;
 
   // Header-level totals
-  const estimadoAcumulado = computedRows.reduce((s, r) => s + r.importeAnt, 0);
-  const porEstimar = Math.max(0, (proyecto?.monto_contrato ?? 0) - estimadoAcumulado - localSubtotal);
+  // Estimado Acumulado = todo lo estimado en periodos ANTERIORES a esta estimación
+  // (incluye cantidad_anterior de modo actualización y cantidad_esta_est de
+  // estimaciones previas). Calculado a nivel de proyecto en getEstimadoAcumuladoPrevio.
+  const estimadoAcumulado = estimadoAcumuladoProyecto;
+  // Por Estimar = monto_contrato - (Estimado Acumulado + Esta Estimación)
+  const porEstimar = Math.max(
+    0,
+    (proyecto?.monto_contrato ?? 0) - (estimadoAcumulado + localSubtotal)
+  );
 
   // ── Contratista (extracted from proyecto.nombre "CONJUNTO — CONTRATISTA") ───
   const contratista = (() => {
@@ -314,7 +326,7 @@ export default function PdfSoporte() {
           <col style="width:12%"/><col style="width:6%"/><col style="width:6%"/><col style="width:24%"/>
         </colgroup>
         <tr style="height:20px">
-          <td rowspan="4" style="width:120px; padding:4px; border:1px solid #ccc; text-align:center; vertical-align:middle;">${logoSrc ? `<img src="${logoSrc}" style="max-width:110px; max-height:50px; object-fit:contain;" />` : '<span style="font-size:14px; font-weight:bold; color:#003d9b;">JAVER</span>'}</td>
+          <td rowspan="4" style="width:120px; padding:4px; border:1px solid #000; text-align:center; vertical-align:middle; background:#ffffff;">${logoSrc ? `<img src="${logoSrc}" style="width:110px; height:auto; max-height:70px; object-fit:contain; image-rendering:-webkit-optimize-contrast;" />` : '<span style="font-size:14px; font-weight:bold; color:#003d9b;">JAVER</span>'}</td>
           <td class="hdr-title">DESARROLLO</td>
           <td class="hdr-title">FRENTE</td>
           <td class="hdr-title">CONJUNTO</td>
