@@ -17,8 +17,8 @@
  */
 
 // ── Configuracion (reemplazar tras crear bot Telegram) ─────────────────────
-const TELEGRAM_BOT_TOKEN = 'PENDING_CONFIG';
-const TELEGRAM_CHAT_ID = 'PENDING_CONFIG';
+const TELEGRAM_BOT_TOKEN = '8763972500:AAFeJhlMTNNO1TYvU0BIK2Wlgxy9kRO3Pvc';
+const TELEGRAM_CHAT_ID = '8237236486';
 
 interface CanjeoInfo {
   code: string;
