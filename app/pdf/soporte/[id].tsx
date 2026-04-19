@@ -16,7 +16,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
-import { Asset } from 'expo-asset';
+import { LOGO_JAVER_DATA_URI } from '../../../assets/logoJaverBase64';
 import {
   initDatabase, getEstimacionById, getProyectoById,
   getDetallesByEstimacion, getEmpresa,
@@ -296,16 +296,9 @@ export default function PdfSoporte() {
 
   // ── buildHtml — replica FORMATO_ESTIMA_FACIL.xlsx ───────────────────────────
   const buildHtml = async () => {
-    // Cargar logo JAVER como base64
-    let logoSrc = '';
-    try {
-      const asset = Asset.fromModule(require('../../../assets/logo-javer.png'));
-      await asset.downloadAsync();
-      const logoBase64 = await FileSystem.readAsStringAsync(asset.localUri!, { encoding: 'base64' as any });
-      logoSrc = `data:image/png;base64,${logoBase64}`;
-    } catch (e) {
-      logoSrc = '';
-    }
+    // Logo JAVER embebido como base64 (constante, garantiza render en PDF
+    // sin depender de expo-asset / Metro bundler para resolver el require)
+    const logoSrc = LOGO_JAVER_DATA_URI;
 
     const montoContrato = proyecto?.monto_contrato ?? 0;
     const numEst = estimacion?.numero ?? 1;

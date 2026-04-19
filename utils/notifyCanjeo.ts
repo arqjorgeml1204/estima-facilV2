@@ -1,24 +1,22 @@
 /**
  * notifyCanjeo.ts
  * Notificaciones al owner via Telegram Bot cuando se canjea un codigo.
+ * Incluye boton inline "REVOCAR" que dispara una Supabase Edge Function.
  *
  * SETUP (una vez):
- * 1. Abrir Telegram y chatear con @BotFather
- * 2. Enviar: /newbot
- * 3. Seguir instrucciones (nombre + username)
- * 4. Copiar el token HTTP API que entrega @BotFather -> TELEGRAM_BOT_TOKEN
- * 5. Abrir chat con el nuevo bot y enviarle cualquier mensaje
- * 6. Abrir: https://api.telegram.org/bot<TOKEN>/getUpdates
- * 7. Copiar result[0].message.chat.id -> TELEGRAM_CHAT_ID
- * 8. Reemplazar las constantes abajo
- *
- * Si no esta configurado, las notificaciones fallan silenciosamente
- * sin afectar el flujo de canjeo.
+ *  - Bot Telegram ya creado (@ESTIMAFACILBOT)
+ *  - Edge Function `revoke-code` desplegada en Supabase (ver supabase/functions/revoke-code/index.ts)
+ *  - REVOKE_SECRET_TOKEN debe coincidir con el env var de la Edge Function
  */
 
-// ── Configuracion (reemplazar tras crear bot Telegram) ─────────────────────
+// ── Configuracion ──────────────────────────────────────────────────────────
 const TELEGRAM_BOT_TOKEN = '8763972500:AAFeJhlMTNNO1TYvU0BIK2Wlgxy9kRO3Pvc';
 const TELEGRAM_CHAT_ID = '8237236486';
+
+// Secret compartido con la Edge Function (Dashboard > Edge Functions > Secrets)
+const REVOKE_SECRET_TOKEN = '06f41cac8cf08c934f6f26b85fd7bc85d26d4da48c6abecf';
+// URL de la Edge Function desplegada en Supabase
+const REVOKE_ENDPOINT = 'https://zolfaqrvgirdnwqypxwd.supabase.co/functions/v1/revoke-code';
 
 interface CanjeoInfo {
   code: string;
@@ -27,8 +25,11 @@ interface CanjeoInfo {
   days: number;
 }
 
+function buildRevokeUrl(code: string): string {
+  return `${REVOKE_ENDPOINT}?code=${encodeURIComponent(code)}&token=${REVOKE_SECRET_TOKEN}`;
+}
+
 export async function notifyCanjeo(info: CanjeoInfo): Promise<void> {
-  // Fire-and-forget: si no esta configurado, salir en silencio
   if (TELEGRAM_BOT_TOKEN === 'PENDING_CONFIG' || TELEGRAM_CHAT_ID === 'PENDING_CONFIG') {
     return;
   }
@@ -39,8 +40,7 @@ export async function notifyCanjeo(info: CanjeoInfo): Promise<void> {
     `Usuario: ${info.userId}\n` +
     `Plan: ${info.type} (${info.days} dias)\n` +
     `Fecha: ${new Date().toLocaleString('es-MX')}\n\n` +
-    `Revocar si el pago no llego:\n` +
-    `UPDATE activation_codes SET is_revoked=true, revoked_at=NOW() WHERE code='${info.code}';`;
+    `Si el pago no llego, toca el boton de abajo para revocar.`;
 
   try {
     await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -49,6 +49,11 @@ export async function notifyCanjeo(info: CanjeoInfo): Promise<void> {
       body: JSON.stringify({
         chat_id: TELEGRAM_CHAT_ID,
         text: mensaje,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: `REVOCAR ${info.code}`, url: buildRevokeUrl(info.code) }],
+          ],
+        },
       }),
     });
   } catch {

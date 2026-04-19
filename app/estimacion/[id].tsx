@@ -213,6 +213,7 @@ const ConceptoRow = React.memo(function ConceptoRow({
         ref={(ref) => registerScrollRef(rowKey, ref)}
         onScroll={(e) => onHorizontalScroll(e.nativeEvent.contentOffset.x, rowKey)}
         scrollEventThrottle={16}
+        decelerationRate="fast"
       >
         <View style={{ flexDirection: 'row' }}>
           {Array.from({ length: colCount }, (_, colIdx) => {
@@ -864,6 +865,10 @@ export default function EstimacionGrid() {
   // imperativamente vía refs (sin re-renders).
   const gridScrollRefs = useRef<Map<string, any>>(new Map());
   const lastScrollX = useRef(0);
+  // Lock para evitar feedback loop entre scrolls programáticos y onScroll.
+  // Cuando hacemos scrollTo() sobre las otras filas, ellas emiten su propio
+  // onScroll que volvería a llamar handleHorizontalScroll → backscroll/jitter.
+  const isSyncing = useRef<boolean>(false);
 
   const registerScrollRef = useCallback((key: string, ref: any) => {
     if (ref) {
@@ -879,11 +884,20 @@ export default function EstimacionGrid() {
   }, []);
 
   const handleHorizontalScroll = useCallback((x: number, selfKey: string) => {
+    // Si este onScroll fue causado por un scrollTo() programático que
+    // nosotros disparamos, ignorarlo: rompe el feedback loop.
+    if (isSyncing.current) return;
     lastScrollX.current = x;
+    isSyncing.current = true;
     gridScrollRefs.current.forEach((ref, key) => {
       if (key !== selfKey && ref) {
         ref.scrollTo({ x, animated: false });
       }
+    });
+    // Liberar el lock en el siguiente frame, para garantizar que todos
+    // los onScroll programáticos ya se hayan emitido (y descartado).
+    requestAnimationFrame(() => {
+      isSyncing.current = false;
     });
   }, []);
 
@@ -920,6 +934,19 @@ export default function EstimacionGrid() {
     return items;
   }, [conceptosFiltrados]);
 
+  // ── Header colCount: max factor entre los conceptos filtrados ───────────────
+  // El header (labels 1..N) debe llegar al máximo factor de cualquier concepto
+  // visible, para que ningún row se quede sin labels en su parte derecha.
+  // IMPORTANT: useMemo MUST be called before any early return (Rules of Hooks).
+  const headerColCount = useMemo(() => {
+    if (conceptosFiltrados.length === 0) return 1;
+    let max = 0;
+    for (const c of conceptosFiltrados) {
+      if (c.factor > max) max = c.factor;
+    }
+    return max > 0 ? max : 1;
+  }, [conceptosFiltrados]);
+
   // ── Loading ──────────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -932,7 +959,10 @@ export default function EstimacionGrid() {
   const totalUnidades = proyecto?.total_unidades ?? 1;
 
   // ── Columnas: unidades 1…N ───────────────────────────────────────────────────
-  const colCount = Math.min(totalUnidades, 20);
+  // El header usa el factor MÁXIMO entre los conceptos filtrados (cubre
+  // contratos con cualquier número de casas/unidades — sin cap artificial).
+  // Cada row usa su propio `concepto.factor` como colCount (ver renderItem).
+  const colCount = headerColCount;
   const CELL_W = 42;
   const COL_W = 170;
 
@@ -1210,6 +1240,7 @@ export default function EstimacionGrid() {
                 ref={(ref) => registerScrollRef('__header__', ref)}
                 onScroll={(e) => handleHorizontalScroll(e.nativeEvent.contentOffset.x, '__header__')}
                 scrollEventThrottle={16}
+                decelerationRate="fast"
               >
                 <View style={{ flexDirection: 'row' }}>
                   {Array.from({ length: colCount }, (_, i) => (
@@ -1246,7 +1277,7 @@ export default function EstimacionGrid() {
                 priorLocked={priorData[concepto.id]?.cantidad ?? 0}
                 priorSemana={priorData[concepto.id]?.semana ?? 0}
                 isEvenRow={item.idx % 2 === 0}
-                colCount={colCount}
+                colCount={(concepto.factor && concepto.factor > 0) ? concepto.factor : 1}
                 cellW={CELL_W}
                 colW={COL_W}
                 modoActualizacion={modoActualizacion}
