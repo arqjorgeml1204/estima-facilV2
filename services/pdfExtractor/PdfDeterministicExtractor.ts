@@ -273,7 +273,15 @@ export class PdfDeterministicExtractor {
         // 7. Activity line → upsert into conceptosMap
         const raw = parseLineaActividad(line);
         if (raw) {
-          const key = raw.codigoActividad;
+          // Bug fix: la clave de agrupación debe incluir paquete y sub-paquete,
+          // no sólo codigoActividad. El PDF JAVER puede repetir el mismo
+          // codigoActividad bajo sub-paquetes distintos (p. ej. "ZOCLO PB" en
+          // sub-paquete 397 y "ZOCLO 1ER NIVEL" en sub-paquete 398). Antes se
+          // fusionaban en un solo concepto y se duplicaba factorTotal (2X casas).
+          // Ahora cada (paquete, subpaquete, codigoActividad) es único.
+          const paqKey = context.paqueteActual || '';
+          const subKey = context.subpaqueteActual || '';
+          const key = `${paqKey}||${subKey}||${raw.codigoActividad}`;
           const existing = context.conceptosMap.get(key);
 
           if (existing) {

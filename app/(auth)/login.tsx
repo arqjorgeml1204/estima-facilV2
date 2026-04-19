@@ -14,6 +14,8 @@ import { router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { hashPassword, getUserRemote, registerUserRemote } from '../../utils/auth';
 import { getUsuarioByUserId, createUsuario, initDatabase, getDb } from '../../db/database';
+import { restoreFromCloud } from '../../utils/dataSync';
+import { syncSubscriptionFromCloud } from '../../utils/subscription';
 
 const STORAGE_KEY_EMAIL    = '@estimafacil:email';
 const STORAGE_KEY_REMEMBER = '@estimafacil:remember';
@@ -40,6 +42,14 @@ export default function LoginScreen() {
           if (savedEmail) setEmailOrPhone(savedEmail);
           const logged = await AsyncStorage.getItem(STORAGE_KEY_LOGGED);
           if (logged === 'true') {
+            // Auto-login: tambien intentar restore + sub-sync silencioso
+            try {
+              const savedUid = await AsyncStorage.getItem(STORAGE_KEY_USERID);
+              if (savedUid && savedUid.indexOf('@') >= 0) {
+                await restoreFromCloud(savedUid);
+                await syncSubscriptionFromCloud(savedUid);
+              }
+            } catch (_) {}
             router.replace('/(tabs)');
             return;
           }
@@ -137,6 +147,22 @@ export default function LoginScreen() {
       }
       await AsyncStorage.setItem(STORAGE_KEY_LOGGED, 'true');
       await AsyncStorage.setItem(STORAGE_KEY_USERID, userId);
+
+      // ── Recuperacion tras reinstalacion ───────────────────────────────────
+      // 1) Restaurar proyectos/conceptos/estimaciones desde Supabase si la BD
+      //    local esta vacia (solo si hay snapshot remoto para este email).
+      // 2) Hidratar el estado de suscripcion desde activation_codes remoto.
+      // Ambos son fire-and-forget y silenciosos: si la red falla el login
+      // sigue funcionando normalmente (offline-first).
+      try {
+        if (isEmail) {
+          await restoreFromCloud(userId);
+          await syncSubscriptionFromCloud(userId);
+        }
+      } catch (_) {
+        // No bloquear login por fallas de red o parse.
+      }
+
       router.replace('/(tabs)');
     } catch (e) {
       setError('Error al iniciar sesion. Intenta de nuevo.');

@@ -37,6 +37,12 @@ export async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
       try {
         await database.execAsync(`ALTER TABLE concepto ADD COLUMN paquete TEXT DEFAULT ''`);
       } catch (_) {}
+      // Migración no destructiva: agrega `subpaquete` para DBs previas al fix
+      // de agrupamiento (sesión actual). Proyectos existentes mantendrán
+      // subpaquete = '' / NULL y el grid debe manejar esos casos.
+      try {
+        await database.execAsync(`ALTER TABLE concepto ADD COLUMN subpaquete TEXT DEFAULT ''`);
+      } catch (_) {}
       try {
         await database.execAsync(`ALTER TABLE proyecto ADD COLUMN alias TEXT DEFAULT ''`);
       } catch (_) {}

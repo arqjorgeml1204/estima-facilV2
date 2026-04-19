@@ -29,6 +29,72 @@ export async function hasActiveSubscription(userId: string): Promise<boolean> {
   return new Date(expires) > new Date();
 }
 
+// ── Self-healing: hidratar sub local desde Supabase ────────────────────────
+
+/**
+ * Consulta Supabase por cualquier codigo activo del usuario (vigente y no revocado)
+ * y lo restaura a AsyncStorage si el local no tiene datos.
+ *
+ * Usar al arrancar la app o antes de verificar si el usuario es Premium,
+ * especialmente tras una reinstalacion (cuando AsyncStorage se borra pero
+ * activation_codes en Supabase persiste).
+ *
+ * Flujo:
+ *   1. Si AsyncStorage local tiene sub valida y coherente → no tocar nada.
+ *   2. Si local vacio → buscar en remoto un codigo used_by=userId, !revocado, vigente.
+ *      Si existe → restaurar expires/type/code en AsyncStorage.
+ *   3. Si local dice premium pero remoto dice revoked/expired → invalidar local.
+ *
+ * Todas las fallas de red son silenciosas (no bloquea offline).
+ */
+export async function syncSubscriptionFromCloud(userId: string): Promise<boolean> {
+  if (!userId || userId === 'default') return false;
+
+  try {
+    // 1) Primero intentar revocar local si el codigo activo fue revocado remoto.
+    await verifyRevocationAndInvalidate(userId);
+
+    // 2) Releer estado local tras la revocacion
+    const localExpires = await AsyncStorage.getItem(keySubExpires(userId));
+    const localStillValid = localExpires && new Date(localExpires) > new Date();
+    if (localStillValid) return true;
+
+    // 3) Local vacio o expirado → buscar en Supabase
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/activation_codes?used_by=eq.${encodeURIComponent(userId)}&is_used=eq.true&is_revoked=is.false&select=code,type,days,used_at&order=used_at.desc&limit=1`,
+      {
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+      },
+    );
+
+    if (!res.ok) return false;
+    const rows = await res.json();
+    if (!rows || rows.length === 0) return false;
+
+    const row = rows[0];
+    const usedAt = row.used_at ? new Date(row.used_at) : new Date();
+    const daysNum = Number(row.days) || 0;
+    const expiresAt = new Date(usedAt);
+    expiresAt.setDate(expiresAt.getDate() + daysNum);
+
+    // 4) Si todavia esta vigente → hidratar local
+    if (expiresAt > new Date()) {
+      await AsyncStorage.setItem(keySubExpires(userId), expiresAt.toISOString());
+      await AsyncStorage.setItem(keySubType(userId), String(row.type ?? 'premium'));
+      await AsyncStorage.setItem(keySubCode(userId), String(row.code ?? ''));
+      return true;
+    }
+
+    return false;
+  } catch {
+    // Offline o error silencioso — no romper UX
+    return false;
+  }
+}
+
 export async function getDaysRemaining(userId: string): Promise<number> {
   const expires = await AsyncStorage.getItem(keySubExpires(userId));
   if (!expires) return 0;

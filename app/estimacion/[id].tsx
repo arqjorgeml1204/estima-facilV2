@@ -35,6 +35,7 @@ import {
   getCantidadesAnteriores,
 } from '../../db/database';
 import type { CellState } from '../../db/schema';
+import { requestCloudBackup } from '../../utils/dataSync';
 
 // ─── AsyncStorage key ──────────────────────────────────────────────────────────
 
@@ -182,6 +183,26 @@ const ConceptoRow = React.memo(function ConceptoRow({
             <Text style={{ fontSize: 9, fontWeight: '700', color: '#2196F3' }}>{getUpdateCounter()}</Text>
           </View>
         )}
+        {/* Paquete / sub-paquete prefix — facilita localizar conceptos.
+            Extrae sólo el número (antes del " - ") para compactarlo. Maneja
+            backward compat: si paquete/subpaquete son null o '' simplemente
+            se omiten. */}
+        {(() => {
+          const paqRaw = (concepto.paquete || '').trim();
+          const subRaw = (concepto.subpaquete || '').trim();
+          const paqNum = paqRaw ? (paqRaw.split(' - ')[0] || '').trim() : '';
+          const subNum = subRaw ? (subRaw.split(' - ')[0] || '').trim() : '';
+          let prefix = '';
+          if (paqNum && subNum) prefix = `${paqNum}.${subNum}`;
+          else if (paqNum) prefix = paqNum;
+          else if (subNum) prefix = subNum;
+          if (!prefix) return null;
+          return (
+            <Text style={{ fontSize: 9, fontWeight: '700', color: '#737685', marginBottom: 1 }}>
+              {prefix}
+            </Text>
+          );
+        })()}
         <Text style={{ fontSize: 11, fontWeight: '700', color: '#191c1e', lineHeight: 15 }} numberOfLines={2}>
           {concepto.descripcion}
         </Text>
@@ -857,6 +878,15 @@ export default function EstimacionGrid() {
     setDetalles(detMap);
 
     setSaving(false);
+
+    // Backup a Supabase (fire-and-forget, debounced, silencioso).
+    // Se dispara tras guardar exitoso para que la data persista aun si el
+    // usuario desinstala la app.
+    try {
+      const uid = await AsyncStorage.getItem('@estimafacil:user_id');
+      if (uid && uid.indexOf('@') >= 0) requestCloudBackup(uid);
+    } catch (_) {}
+
     Alert.alert('Guardado', 'La estimación fue guardada correctamente.');
   }, [conceptos, priorData, detalles, estId]);
 
