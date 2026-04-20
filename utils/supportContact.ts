@@ -23,8 +23,7 @@ import { Linking } from 'react-native';
 const TELEGRAM_BOT_TOKEN = '8763972500:AAFeJhlMTNNO1TYvU0BIK2Wlgxy9kRO3Pvc';
 const TELEGRAM_CHAT_ID = '8237236486';
 
-// TODO PM: Configurar numero admin en formato internacional, ej: +521234567890
-const ADMIN_WHATSAPP_PHONE = 'PENDING_CONFIG';
+const ADMIN_WHATSAPP_PHONE = '+522284104931';
 
 // ── Tipos ──────────────────────────────────────────────────────────────────
 export interface SupportPayload {
