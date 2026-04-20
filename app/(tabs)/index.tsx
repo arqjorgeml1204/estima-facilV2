@@ -15,7 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 import { initDatabase, getProyectos, deleteProyecto, updateProyectoAlias, getTotalEstimadoPorProyecto } from '../../db/database';
 import { getCurrentUserId } from '../../utils/auth';
-import { hasActiveSubscription, activateTrial, getSubscriptionType } from '../../utils/subscription';
+import { hasActiveSubscription, activateTrial, getSubscriptionType, syncSubscriptionFromCloud } from '../../utils/subscription';
 import ContractUploadModal from '../../components/ContractUploadModal';
 
 const STORAGE_KEY_FIRST_TIME = '@estimafacil:firstTime';
@@ -78,35 +78,64 @@ export default function ProyectosScreen() {
         })
       );
       setProyectos(proyectosConRestante);
-
-      // Verificar suscripcion (no bloquear — solo informar)
-      const active = await hasActiveSubscription(userId);
-      if (!active) {
-        const subType = await getSubscriptionType(userId);
-        const trialOption = subType === null
-          ? [{
-              text: 'Activar prueba gratuita',
-              onPress: async () => {
-                await activateTrial(userId);
-                router.replace('/(tabs)');
-              },
-            }]
-          : [];
-        Alert.alert(
-          'Suscripcion requerida',
-          subType === null
-            ? 'No tienes una suscripcion activa. Activa tu prueba gratuita de 15 dias o elige un plan.'
-            : 'Tu periodo de prueba ha vencido. Activa tu suscripcion para continuar usando EstimaFacil.',
-          [
-            ...trialOption,
-            { text: 'Activar ahora', onPress: () => router.push('/suscripcion') },
-            { text: 'Cerrar', style: 'cancel' },
-          ],
-        );
-      }
     } finally {
       setLoading(false);
     }
+
+    // ── Gate de suscripcion (NO bloquea la UI) ────────────────────────────
+    // Sync contra Supabase primero (5s timeout, fail-open) y luego re-leer
+    // el estado local. Si remoto dice revocado → limpiar local y redirigir.
+    // Esto corre DESPUES de setLoading(false) para que la lista se pinte ya.
+    (async () => {
+      try {
+        const userId = await getCurrentUserId();
+
+        const sync = await syncSubscriptionFromCloud(userId, 5000);
+
+        if (sync.revoked) {
+          // Sub local ya fue borrada por syncSubscriptionFromCloud.
+          Alert.alert(
+            'Tu codigo fue revocado',
+            'Tu suscripcion fue revocada por el administrador. Canjea un codigo nuevo o activa un plan para continuar.',
+            [
+              {
+                text: 'Ir a suscripcion',
+                onPress: () => router.replace('/suscripcion'),
+              },
+            ],
+          );
+          return;
+        }
+
+        // Releer estado local (ya esta fresco tras el sync, o sin cambios si fail-open)
+        const active = await hasActiveSubscription(userId);
+        if (!active) {
+          const subType = await getSubscriptionType(userId);
+          const trialOption = subType === null
+            ? [{
+                text: 'Activar prueba gratuita',
+                onPress: async () => {
+                  await activateTrial(userId);
+                  router.replace('/(tabs)');
+                },
+              }]
+            : [];
+          Alert.alert(
+            'Suscripcion requerida',
+            subType === null
+              ? 'No tienes una suscripcion activa. Activa tu prueba gratuita de 15 dias o elige un plan.'
+              : 'Tu periodo de prueba ha vencido. Activa tu suscripcion para continuar usando EstimaFacil.',
+            [
+              ...trialOption,
+              { text: 'Activar ahora', onPress: () => router.push('/suscripcion') },
+              { text: 'Cerrar', style: 'cancel' },
+            ],
+          );
+        }
+      } catch (_) {
+        // Nunca bloquear la UI por el gate.
+      }
+    })();
   };
 
   const handleContractLoaded = async (proyectoId: number) => {

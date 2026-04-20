@@ -206,20 +206,43 @@ export function extractMonto(text: string): number | null {
 // ─── Alcance detallado extraction ────────────────────────────────────────────
 
 /**
- * Extract frente description from alcance detallado.
- * Format: "Frente 01 - FRENTE 01 EDIFICACION"
+ * Extract frente (numero + nombre) from alcance detallado.
+ *
+ * Formatos admitidos en el buffer space-joined (sin newlines):
+ *   "Frente 01 - FRENTE 01 EDIFICACION ..."
+ *   "FRENTE 61 PLATAFORMAS ..."
+ *   "Frente 7 EDIFICACION ..."
+ *
+ * Hermes-safe: sin lookahead/lookbehind, sin named groups, sin flag `m`,
+ * sin ancla `^`. El grupo no-capturante al final consume el delimitador,
+ * y el match[2] queda recortado a sólo el nombre por la captura no-greedy.
  */
-export function extractFrenteFromAlcance(text: string): string | null {
-  const match = text.match(/^Frente\s+\d+\s*-\s*(.+)$/im);
-  return match ? match[1].trim() : null;
+export function extractFrenteFromAlcance(
+  text: string,
+): { numero: string; nombre: string } | null {
+  if (!text) return null;
+  const match = text.match(
+    /[Ff]rente\s+(\d+)\s*[-–—]?\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ0-9\s\.\-]{2,60}?)(?:\s{2,}|\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]|\s+\d+\s*%|$)/,
+  );
+  if (!match) return null;
+  const numero = match[1].trim();
+  const nombre = match[2].trim();
+  if (!numero || !nombre) return null;
+  return { numero, nombre };
 }
 
 /**
  * Extract fondo de garantía percentage.
- * Format: "Fondo de garantía 5 %"
+ * Formatos admitidos:
+ *   "Fondo de garantía 5 %"
+ *   "FONDO DE GARANTÍA: 5%"
+ *   "Fondo de garantia - 2.5%"
+ * Hermes-safe: sin lookahead/lookbehind, sin named groups.
  */
 export function extractFondoGarantia(text: string): number | null {
-  const match = text.match(/Fondo\s+de\s+garant[ií]a\s+(\d+(?:\.\d+)?)\s*%/i);
+  const match = text.match(
+    /Fondo\s+de\s+garant[ií]a\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*%/i,
+  );
   if (!match) return null;
   const value = parseFloat(match[1]);
   return isNaN(value) ? null : value;

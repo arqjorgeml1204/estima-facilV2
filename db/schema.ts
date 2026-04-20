@@ -32,7 +32,10 @@ export interface Proyecto {
   descripcionContrato: string; // NOTAS del PDF
   empresaId: number;
   desarrolladoraId: number;
-  frente: string;           // "FRENTE 01 EDIFICACION"
+  frente: string;           // legacy: "FRENTE 01 EDIFICACION" (se mantiene por back-compat)
+  frenteNumero?: string;    // e.g. "01", "61", "7"
+  frenteNombre?: string;    // e.g. "PLATAFORMAS", "EDIFICACION"
+  fondoGarantiaPct?: number; // e.g. 5 (porcentaje)
   conjunto: string;         // "D38-01-C03-18"
   montoContrato: number;
   totalUnidades: number;    // 20

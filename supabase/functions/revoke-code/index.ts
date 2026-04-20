@@ -3,9 +3,15 @@
 // Name: revoke-code
 //
 // Required env var (Dashboard > Project Settings > Edge Functions > Secrets):
-//   REVOKE_SECRET_TOKEN = <secret-token>   (el mismo que está en utils/notifyCanjeo.ts)
+//   REVOKE_SECRET_TOKEN = <secret-token>   (el mismo que esta en utils/notifyCanjeo.ts)
 //
 // Usage (desde Telegram button): GET https://<PROJECT>.supabase.co/functions/v1/revoke-code?code=XXX&token=YYY
+//
+// Notas de encoding (fix mojibake tipo "CÃ³digo"):
+//   - El HTML se envia como bytes UTF-8 explicitos (TextEncoder.encode) en vez de como string,
+//     para evitar que el navegador in-app de Telegram interprete el body como Latin-1.
+//   - El string HTML NO lleva BOM al principio.
+//   - Se manda charset=utf-8 en el Content-Type ademas de meta charset y X-Content-Type-Options: nosniff.
 
 // @ts-nocheck
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
@@ -20,6 +26,7 @@ function htmlResponse(status: number, title: string, body: string, color = '#003
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${title}</title>
   <style>
@@ -32,7 +39,15 @@ function htmlResponse(status: number, title: string, body: string, color = '#003
 </head>
 <body><div class="card"><h1>${title}</h1>${body}</div></body>
 </html>`;
-  return new Response(html, { status, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+  const bytes = new TextEncoder().encode(html);
+  return new Response(bytes, {
+    status,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
 }
 
 serve(async (req) => {
@@ -60,7 +75,12 @@ serve(async (req) => {
       return htmlResponse(404, 'Código no encontrado', `<p>El código <code>${code}</code> no existe.</p>`, '#D32F2F');
     }
     if (existing.is_revoked) {
-      return htmlResponse(200, 'Ya estaba revocado', `<p>El código <code>${code}</code> ya había sido revocado previamente.</p><p>Usuario: <code>${existing.used_by ?? '-'}</code></p>`, '#E68200');
+      return htmlResponse(
+        200,
+        'Ya estaba revocado',
+        `<p>El código <code>${code}</code> ya había sido revocado previamente.</p><p>Usuario: <code>${existing.used_by ?? '-'}</code></p>`,
+        '#E68200',
+      );
     }
 
     const { error: updErr } = await supabase
@@ -75,7 +95,7 @@ serve(async (req) => {
     return htmlResponse(
       200,
       'Código revocado',
-      `<p>El código <code>${code}</code> ha sido revocado.</p><p>Usuario afectado: <code>${existing.used_by ?? '-'}</code></p><p>La suscripción se invalidará la próxima vez que el usuario abra la app.</p>`,
+      `<p>El código <code>${code}</code> ha sido revocado.</p><p>Usuario afectado: <code>${existing.used_by ?? '-'}</code></p><p>La suscripción se invalidará la próxima vez que el usuario abra la app o la ponga en primer plano.</p>`,
       '#1A7A3C',
     );
   } catch (e) {

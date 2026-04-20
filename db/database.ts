@@ -49,6 +49,17 @@ export async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
       try {
         await database.execAsync(`ALTER TABLE proyecto ADD COLUMN fondo_garantia REAL DEFAULT 0`);
       } catch (_) {}
+      // Nuevas columnas: frente desdoblado en numero+nombre y % fondo garantía.
+      // Backward-compat: proyectos viejos quedan con defaults '01' / '' / 5.
+      try {
+        await database.execAsync(`ALTER TABLE proyecto ADD COLUMN frente_numero TEXT DEFAULT '01'`);
+      } catch (_) {}
+      try {
+        await database.execAsync(`ALTER TABLE proyecto ADD COLUMN frente_nombre TEXT DEFAULT ''`);
+      } catch (_) {}
+      try {
+        await database.execAsync(`ALTER TABLE proyecto ADD COLUMN fondo_garantia_pct REAL DEFAULT 5`);
+      } catch (_) {}
       // Multi-cuenta: user_id en proyecto y empresa
       try {
         await database.execAsync(`ALTER TABLE proyecto ADD COLUMN user_id TEXT DEFAULT ''`);
@@ -144,14 +155,25 @@ export async function seedFromContract(
   const prototipo = data.conceptos[0]?.prototipos[0] ?? '';
 
   // 3. Proyecto
+  // Frente: el extractor devuelve numero+nombre por separado.
+  // Back-compat: la columna legacy `frente` sigue siendo TEXT; la rellenamos con
+  // el string compuesto "FRENTE {numero} {nombre}" para que pantallas antiguas
+  // que leen `frente` sigan funcionando sin cambios.
+  const frenteNumero = (data.frenteNumero && data.frenteNumero.trim()) || '01';
+  const frenteNombre = (data.frenteNombre && data.frenteNombre.trim()) || '';
+  const frenteLegacy = frenteNombre
+    ? `FRENTE ${frenteNumero} ${frenteNombre}`
+    : `FRENTE ${frenteNumero}`;
+  const fondoGarantiaPct = data.fondoGarantia != null ? data.fondoGarantia : 5;
+
   const proyectoResult = await database.runAsync(
     `INSERT INTO proyecto (
       codigo, numero_contrato, nombre, descripcion_contrato,
       empresa_id, desarrolladora_id,
-      frente, conjunto, monto_contrato,
+      frente, frente_numero, frente_nombre, conjunto, monto_contrato,
       total_unidades, factor_por_seccion, prototipo,
-      fecha_inicio, fecha_terminacion, fondo_garantia, user_id
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      fecha_inicio, fecha_terminacion, fondo_garantia, fondo_garantia_pct, user_id
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       data.conjunto,
       data.numeroContrato,
@@ -159,7 +181,9 @@ export async function seedFromContract(
       data.descripcionObra ?? '',
       empresaId,
       desarrolladora.id,
-      data.frente || 'FRENTE 01',
+      frenteLegacy,
+      frenteNumero,
+      frenteNombre,
       data.conjunto,
       data.montoContrato,
       totalUnidades,
@@ -167,7 +191,8 @@ export async function seedFromContract(
       prototipo,
       '',  // fechaInicio — not extracted
       '',  // fechaTerminacion — not extracted
-      data.fondoGarantia ?? 0,
+      fondoGarantiaPct,    // legacy column (mantenida por back-compat)
+      fondoGarantiaPct,    // nueva columna explícita
       userId,
     ]
   );

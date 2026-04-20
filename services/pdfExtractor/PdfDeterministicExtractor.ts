@@ -52,7 +52,8 @@ interface ParserContext {
   numeroContrato: string | null;
   descripcionObra: string | null;
   montoContrato: number | null;
-  frente: string | null;
+  frenteNumero: string | null;
+  frenteNombre: string | null;
   fondoGarantia: number | null;
   prototipoActual: string | null;
   paqueteActual: string | null;
@@ -149,7 +150,8 @@ export class PdfDeterministicExtractor {
       numeroContrato: null,
       descripcionObra: null,
       montoContrato: null,
-      frente: null,
+      frenteNumero: null,
+      frenteNombre: null,
       fondoGarantia: null,
       prototipoActual: null,
       paqueteActual: null,
@@ -202,8 +204,12 @@ export class PdfDeterministicExtractor {
         context.alcanceBuffer += ' ' + line;
 
         // Extract ALL fields from the alcance buffer
-        if (!context.frente) {
-          context.frente = extractFrenteFromAlcance(context.alcanceBuffer);
+        if (!context.frenteNumero || !context.frenteNombre) {
+          const f = extractFrenteFromAlcance(context.alcanceBuffer);
+          if (f) {
+            context.frenteNumero = f.numero;
+            context.frenteNombre = f.nombre;
+          }
         }
         if (!context.conjunto) {
           context.conjunto = extractConjunto(context.alcanceBuffer);
@@ -273,15 +279,20 @@ export class PdfDeterministicExtractor {
         // 7. Activity line → upsert into conceptosMap
         const raw = parseLineaActividad(line);
         if (raw) {
-          // Bug fix: la clave de agrupación debe incluir paquete y sub-paquete,
-          // no sólo codigoActividad. El PDF JAVER puede repetir el mismo
+          // Bug fix: la clave de agrupación debe incluir paquete, sub-paquete
+          // Y costo unitario. El PDF JAVER puede repetir el mismo
           // codigoActividad bajo sub-paquetes distintos (p. ej. "ZOCLO PB" en
           // sub-paquete 397 y "ZOCLO 1ER NIVEL" en sub-paquete 398). Antes se
           // fusionaban en un solo concepto y se duplicaba factorTotal (2X casas).
-          // Ahora cada (paquete, subpaquete, codigoActividad) es único.
+          // Además: dentro del MISMO paquete/subpaquete/codigoActividad pueden
+          // existir dos líneas con costos unitarios distintos (p. ej.
+          // "4.05.0552 MURO DE CONTENCIÓN" a $100,000 y $200,000). Si se fusionan
+          // se pierde un costo unitario y el total no cuadra con el del contrato.
+          // Por eso incluimos también costoUnitario normalizado en la key.
           const paqKey = context.paqueteActual || '';
           const subKey = context.subpaqueteActual || '';
-          const key = `${paqKey}||${subKey}||${raw.codigoActividad}`;
+          const costoKey = raw.costoUnitario.toFixed(2);
+          const key = `${paqKey}||${subKey}||${raw.codigoActividad}||${costoKey}`;
           const existing = context.conceptosMap.get(key);
 
           if (existing) {
@@ -361,7 +372,8 @@ export class PdfDeterministicExtractor {
       numeroContrato,
       descripcionObra: trimDescripcion(descripcionObra ?? ''),
       montoContrato,
-      frente: context.frente,
+      frenteNumero: context.frenteNumero,
+      frenteNombre: context.frenteNombre,
       fondoGarantia: context.fondoGarantia,
       conceptos: Array.from(context.conceptosMap.values()),
     };

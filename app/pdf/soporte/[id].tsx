@@ -129,6 +129,9 @@ export default function PdfSoporte() {
   const [editingActividad, setEditingActividad] = useState<string | null>(null);
   const [obraAsync, setObraAsync] = useState<string>('VISTAS DEL NEVADO');
   const [frenteAsync, setFrenteAsync] = useState<string>('FRENTE 01');
+  // Retención: arranca en 5% (default back-compat). Si el proyecto trae
+  // fondo_garantia_pct (nuevo) o fondo_garantia (legacy) lo usamos en cuanto
+  // cargue `proyecto`.
   const [retencion, setRetencion] = useState<number>(5);
   const [retencionText, setRetencionText] = useState<string>('5');
   const [evidenciasBase64, setEvidenciasBase64] = useState<Record<string, string>>({});
@@ -172,6 +175,37 @@ export default function PdfSoporte() {
       }
     })();
   }, [id]);
+
+  // ── Hidratar retencion y frente desde el proyecto (con fallback) ────────────
+  // Backward-compat: proyectos viejos pueden no tener fondo_garantia_pct ni
+  // frente_numero/frente_nombre. Fallbacks:
+  //   - fondo_garantia_pct → fondo_garantia (legacy REAL) → 5
+  //   - frente_numero/frente_nombre → frente (legacy TEXT) → AsyncStorage → "FRENTE 01"
+  useEffect(() => {
+    if (!proyecto) return;
+    const pctRaw = proyecto.fondo_garantia_pct;
+    const pctLegacy = proyecto.fondo_garantia;
+    let pct: number;
+    if (pctRaw != null && !isNaN(Number(pctRaw)) && Number(pctRaw) > 0) {
+      pct = Number(pctRaw);
+    } else if (pctLegacy != null && !isNaN(Number(pctLegacy)) && Number(pctLegacy) > 0) {
+      pct = Number(pctLegacy);
+    } else {
+      pct = 5;
+    }
+    setRetencion(pct);
+    setRetencionText(String(pct));
+
+    // Frente: preferir par (numero, nombre). Fallback a string legacy y luego AsyncStorage.
+    const fn = (proyecto.frente_numero ?? '').toString().trim();
+    const fnm = (proyecto.frente_nombre ?? '').toString().trim();
+    if (fn || fnm) {
+      const composed = fnm ? `FRENTE ${fn || '01'} ${fnm}` : `FRENTE ${fn || '01'}`;
+      setFrenteAsync(composed);
+    } else if (proyecto.frente) {
+      setFrenteAsync(proyecto.frente);
+    }
+  }, [proyecto]);
 
   // ── Cargar fotos como base64 cuando evidencias cambian ──────────────────────
   useEffect(() => {
@@ -787,7 +821,7 @@ ${croquesPages}
           <View style={{ flexDirection: 'row', marginTop: 14, gap: 12 }}>
             {[
               { label: 'Subtotal', value: `$${fmt(localSubtotal)}`, color: '#ffffff' },
-              { label: 'Retención 5%', value: `-$${fmt(localRetencion)}`, color: '#ff9e9e' },
+              { label: `Retención ${retencion}%`, value: `-$${fmt(localRetencion)}`, color: '#ff9e9e' },
               { label: 'Total a Pagar', value: `$${fmt(localTotal)}`, color: '#a3f69c' },
             ].map(({ label, value, color }) => (
               <View key={label} style={{ flex: 1 }}>

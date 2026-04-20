@@ -32,67 +32,159 @@ export async function hasActiveSubscription(userId: string): Promise<boolean> {
 // ── Self-healing: hidratar sub local desde Supabase ────────────────────────
 
 /**
+ * Resultado enriquecido de syncSubscriptionFromCloud.
+ *   - revoked:   remoto dice que el codigo activo del usuario fue revocado (la
+ *                suscripcion local ya fue borrada por esta funcion).
+ *   - active:    al terminar el sync, hay suscripcion local vigente.
+ *   - timedOut:  la llamada a Supabase excedio el timeout (fail-open).
+ *   - offline:   error de red o fetch lanzo excepcion (fail-open).
+ */
+export interface SyncSubscriptionResult {
+  revoked: boolean;
+  active: boolean;
+  timedOut: boolean;
+  offline: boolean;
+}
+
+/**
+ * Envuelve una promesa con timeout (Hermes-safe, sin AbortController races).
+ * Si expira, resuelve con `fallback`.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(fallback);
+      }
+    }, ms);
+    promise
+      .then((v) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(v);
+        }
+      })
+      .catch(() => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(fallback);
+        }
+      });
+  });
+}
+
+/**
  * Consulta Supabase por cualquier codigo activo del usuario (vigente y no revocado)
  * y lo restaura a AsyncStorage si el local no tiene datos.
  *
- * Usar al arrancar la app o antes de verificar si el usuario es Premium,
- * especialmente tras una reinstalacion (cuando AsyncStorage se borra pero
- * activation_codes en Supabase persiste).
+ * Usar al arrancar la app, al volver a foreground, y antes de verificar si
+ * el usuario es Premium (especialmente tras una reinstalacion o tras una
+ * revocacion remota via Telegram).
  *
  * Flujo:
- *   1. Si AsyncStorage local tiene sub valida y coherente → no tocar nada.
- *   2. Si local vacio → buscar en remoto un codigo used_by=userId, !revocado, vigente.
+ *   1. Si el usuario tiene un codigo activo local y Supabase dice is_revoked=true
+ *      → borrar AsyncStorage de suscripcion y reportar revoked:true.
+ *   2. Si AsyncStorage local tiene sub valida y coherente → reportar active:true.
+ *   3. Si local vacio → buscar en remoto un codigo used_by=userId, !revocado, vigente.
  *      Si existe → restaurar expires/type/code en AsyncStorage.
- *   3. Si local dice premium pero remoto dice revoked/expired → invalidar local.
  *
- * Todas las fallas de red son silenciosas (no bloquea offline).
+ * Fail-open: timeout de 5s, errores de red no bloquean. Nunca borra local
+ * si no recibio respuesta explicita del servidor.
  */
-export async function syncSubscriptionFromCloud(userId: string): Promise<boolean> {
-  if (!userId || userId === 'default') return false;
+export async function syncSubscriptionFromCloud(
+  userId: string,
+  timeoutMs: number = 5000,
+): Promise<SyncSubscriptionResult> {
+  const defaultResult: SyncSubscriptionResult = {
+    revoked: false,
+    active: false,
+    timedOut: false,
+    offline: false,
+  };
 
-  try {
-    // 1) Primero intentar revocar local si el codigo activo fue revocado remoto.
-    await verifyRevocationAndInvalidate(userId);
+  if (!userId || userId === 'default') return defaultResult;
 
-    // 2) Releer estado local tras la revocacion
-    const localExpires = await AsyncStorage.getItem(keySubExpires(userId));
-    const localStillValid = localExpires && new Date(localExpires) > new Date();
-    if (localStillValid) return true;
+  const run = async (): Promise<SyncSubscriptionResult> => {
+    const result: SyncSubscriptionResult = {
+      revoked: false,
+      active: false,
+      timedOut: false,
+      offline: false,
+    };
 
-    // 3) Local vacio o expirado → buscar en Supabase
-    const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/activation_codes?used_by=eq.${encodeURIComponent(userId)}&is_used=eq.true&is_revoked=is.false&select=code,type,days,used_at&order=used_at.desc&limit=1`,
-      {
-        headers: {
-          apikey: SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    try {
+      // 1) Revocacion: si existe codigo activo local y fue revocado → limpiar local.
+      const wasRevoked = await verifyRevocationAndInvalidate(userId);
+      if (wasRevoked) {
+        result.revoked = true;
+        result.active = false;
+        return result;
+      }
+
+      // 2) Releer estado local tras la revocacion
+      const localExpires = await AsyncStorage.getItem(keySubExpires(userId));
+      const localStillValid = (localExpires && new Date(localExpires) > new Date()) || false;
+      if (localStillValid) {
+        result.active = true;
+        return result;
+      }
+
+      // 3) Local vacio o expirado → buscar en Supabase
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/activation_codes?used_by=eq.${encodeURIComponent(userId)}&is_used=eq.true&is_revoked=is.false&select=code,type,days,used_at&order=used_at.desc&limit=1`,
+        {
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          },
         },
-      },
-    );
+      );
 
-    if (!res.ok) return false;
-    const rows = await res.json();
-    if (!rows || rows.length === 0) return false;
+      if (!res.ok) {
+        result.offline = true;
+        return result;
+      }
+      const rows = await res.json();
+      if (!rows || rows.length === 0) {
+        result.active = false;
+        return result;
+      }
 
-    const row = rows[0];
-    const usedAt = row.used_at ? new Date(row.used_at) : new Date();
-    const daysNum = Number(row.days) || 0;
-    const expiresAt = new Date(usedAt);
-    expiresAt.setDate(expiresAt.getDate() + daysNum);
+      const row = rows[0];
+      const usedAt = row.used_at ? new Date(row.used_at) : new Date();
+      const daysNum = Number(row.days) || 0;
+      const expiresAt = new Date(usedAt);
+      expiresAt.setDate(expiresAt.getDate() + daysNum);
 
-    // 4) Si todavia esta vigente → hidratar local
-    if (expiresAt > new Date()) {
-      await AsyncStorage.setItem(keySubExpires(userId), expiresAt.toISOString());
-      await AsyncStorage.setItem(keySubType(userId), String(row.type ?? 'premium'));
-      await AsyncStorage.setItem(keySubCode(userId), String(row.code ?? ''));
-      return true;
+      // 4) Si todavia esta vigente → hidratar local
+      if (expiresAt > new Date()) {
+        await AsyncStorage.setItem(keySubExpires(userId), expiresAt.toISOString());
+        await AsyncStorage.setItem(keySubType(userId), String((row.type ?? 'premium')));
+        await AsyncStorage.setItem(keySubCode(userId), String((row.code ?? '')));
+        result.active = true;
+        return result;
+      }
+
+      return result;
+    } catch {
+      // Offline o error silencioso — no romper UX, NO borrar local.
+      result.offline = true;
+      return result;
     }
+  };
 
-    return false;
-  } catch {
-    // Offline o error silencioso — no romper UX
-    return false;
-  }
+  const timedOutResult: SyncSubscriptionResult = {
+    revoked: false,
+    active: false,
+    timedOut: true,
+    offline: false,
+  };
+
+  return withTimeout(run(), timeoutMs, timedOutResult);
 }
 
 export async function getDaysRemaining(userId: string): Promise<number> {
