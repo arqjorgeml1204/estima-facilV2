@@ -7,11 +7,9 @@
 //
 // Usage (desde Telegram button): GET https://<PROJECT>.supabase.co/functions/v1/revoke-code?code=XXX&token=YYY
 //
-// Notas de encoding (fix mojibake tipo "CÃ³digo"):
-//   - El HTML se envia como bytes UTF-8 explicitos (TextEncoder.encode) en vez de como string,
-//     para evitar que el navegador in-app de Telegram interprete el body como Latin-1.
-//   - El string HTML NO lleva BOM al principio.
-//   - Se manda charset=utf-8 en el Content-Type ademas de meta charset y X-Content-Type-Options: nosniff.
+// IMPORTANTE: Supabase gateway sobreescribe el Content-Type a text/plain y descarta headers custom.
+// Por eso devolvemos TEXTO PLANO ASCII (sin acentos) en vez de HTML. Funciona universalmente
+// en cualquier navegador in-app (Telegram, WhatsApp, etc.) sin problemas de encoding.
 
 // @ts-nocheck
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
@@ -21,31 +19,12 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const REVOKE_SECRET_TOKEN = Deno.env.get('REVOKE_SECRET_TOKEN')!;
 
-function htmlResponse(status: number, title: string, body: string, color = '#003d9b') {
-  const html = `<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${title}</title>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#f8f9fb; margin:0; padding:24px; color:#191c1e; }
-    .card { max-width:420px; margin:40px auto; background:#ffffff; border-radius:12px; padding:24px; box-shadow:0 4px 16px rgba(0,0,0,0.06); border-top:6px solid ${color}; }
-    h1 { font-size:20px; margin:0 0 8px; color:${color}; }
-    p { font-size:14px; color:#5a5e6b; margin:4px 0; }
-    code { background:#f0f2f7; padding:2px 6px; border-radius:4px; font-size:13px; }
-  </style>
-</head>
-<body><div class="card"><h1>${title}</h1>${body}</div></body>
-</html>`;
-  const bytes = new TextEncoder().encode(html);
-  return new Response(bytes, {
+function textResponse(status: number, body: string): Response {
+  return new Response(body, {
     status,
     headers: {
-      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Type': 'text/plain; charset=utf-8',
       'Cache-Control': 'no-store',
-      'X-Content-Type-Options': 'nosniff',
     },
   });
 }
@@ -57,10 +36,16 @@ serve(async (req) => {
     const token = url.searchParams.get('token');
 
     if (!token || token !== REVOKE_SECRET_TOKEN) {
-      return htmlResponse(401, 'Acceso denegado', '<p>Token inválido.</p>', '#D32F2F');
+      return textResponse(
+        401,
+        'ACCESO DENEGADO\n\nToken invalido.',
+      );
     }
     if (!code) {
-      return htmlResponse(400, 'Parámetro faltante', '<p>Falta el código a revocar.</p>', '#D32F2F');
+      return textResponse(
+        400,
+        'PARAMETRO FALTANTE\n\nFalta el codigo a revocar.',
+      );
     }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE);
@@ -72,14 +57,15 @@ serve(async (req) => {
       .single();
 
     if (selErr || !existing) {
-      return htmlResponse(404, 'Código no encontrado', `<p>El código <code>${code}</code> no existe.</p>`, '#D32F2F');
+      return textResponse(
+        404,
+        `CODIGO NO ENCONTRADO\n\nEl codigo ${code} no existe.`,
+      );
     }
     if (existing.is_revoked) {
-      return htmlResponse(
+      return textResponse(
         200,
-        'Ya estaba revocado',
-        `<p>El código <code>${code}</code> ya había sido revocado previamente.</p><p>Usuario: <code>${existing.used_by ?? '-'}</code></p>`,
-        '#E68200',
+        `YA ESTABA REVOCADO\n\nEl codigo ${code} ya habia sido revocado previamente.\nUsuario: ${existing.used_by ?? '-'}`,
       );
     }
 
@@ -89,16 +75,20 @@ serve(async (req) => {
       .eq('code', code);
 
     if (updErr) {
-      return htmlResponse(500, 'Error', `<p>No se pudo revocar: ${updErr.message}</p>`, '#D32F2F');
+      return textResponse(
+        500,
+        `ERROR\n\nNo se pudo revocar: ${updErr.message}`,
+      );
     }
 
-    return htmlResponse(
+    return textResponse(
       200,
-      'Código revocado',
-      `<p>El código <code>${code}</code> ha sido revocado.</p><p>Usuario afectado: <code>${existing.used_by ?? '-'}</code></p><p>La suscripción se invalidará la próxima vez que el usuario abra la app o la ponga en primer plano.</p>`,
-      '#1A7A3C',
+      `CODIGO REVOCADO\n\nCodigo: ${code}\nUsuario afectado: ${existing.used_by ?? '-'}\n\nLa suscripcion se invalidara la proxima vez que el usuario abra la app o la ponga en primer plano.`,
     );
   } catch (e) {
-    return htmlResponse(500, 'Error interno', `<p>${(e as Error).message}</p>`, '#D32F2F');
+    return textResponse(
+      500,
+      `ERROR INTERNO\n\n${(e as Error).message}`,
+    );
   }
 });

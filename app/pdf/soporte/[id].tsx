@@ -27,6 +27,7 @@ import {
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
 interface RowData {
+  concepto_id: number;
   actividad: string;
   descripcion: string;
   unidad: string;
@@ -42,6 +43,11 @@ interface RowData {
 }
 
 interface GroupedRow {
+  /** Composite group key: `${actividad}||${costo_unitario.toFixed(2)}`.
+   *  Permite que dos conceptos con el mismo codigo de actividad pero distinto
+   *  costo unitario (ej. mismo item en dos subpaquetes con precio diferente)
+   *  se muestren como filas separadas y sumen sus importes por separado. */
+  key: string;
   actividad: string;
   descripcion: string;
   unidad: string;
@@ -253,14 +259,24 @@ export default function PdfSoporte() {
     conceptoMap[c.actividad] = c;
   }
 
-  // ── Agrupar por actividad, sumar cantidades ─────────────────────────────────
+  // ── Agrupar por (actividad + costo_unitario), sumar cantidades ───────────────
+  // Dos conceptos con el mismo codigo_actividad pero distinto costo_unitario
+  // (mismo item en subpaquetes con precio diferente) deben mostrarse como
+  // filas separadas. Se agrupa por compound key para no mezclar factors y
+  // acabar con maxAllowed=0 que filtraria el concepto.
+  // Tambien acumulamos el factor sumado (por si dos detalles distintos
+  // comparten misma actividad+costo_unitario en el hipotetico caso de duplicado).
   const groupedRows: GroupedRow[] = (() => {
-    const map: Record<string, GroupedRow> = {};
+    const map: Record<string, GroupedRow & { _cm?: any }> = {};
     for (const d of detalles) {
-      const key = d.actividad;
+      const key = `${d.actividad}||${(d.costo_unitario ?? 0).toFixed(2)}`;
       if (!map[key]) {
-        const cm = conceptoMap[d.actividad];
+        // Buscar concepto que matchee actividad + costo_unitario para paquete/subpaquete correcto
+        const cm = conceptos.find(
+          c => c.actividad === d.actividad && Math.abs((c.costo_unitario ?? 0) - (d.costo_unitario ?? 0)) < 0.01,
+        ) ?? conceptoMap[d.actividad];
         map[key] = {
+          key,
           actividad: d.actividad,
           descripcion: d.descripcion,
           unidad: d.unidad,
@@ -281,8 +297,8 @@ export default function PdfSoporte() {
   // Aplicar overrides manuales y calcular derivados (#16: cap estaEst a factor)
   // BUG-1: Filtrar conceptos con importe del periodo actual = $0
   const computedRows: ComputedRow[] = groupedRows.map(g => {
-    const rawEstaEst = editedEstaEst[g.actividad] !== undefined
-      ? parseFloat(editedEstaEst[g.actividad]) || 0
+    const rawEstaEst = editedEstaEst[g.key] !== undefined
+      ? parseFloat(editedEstaEst[g.key]) || 0
       : g.estaEstBase;
     const maxAllowed = Math.max(0, g.factor - g.ant);
     const estaEst = Math.min(rawEstaEst, maxAllowed);
