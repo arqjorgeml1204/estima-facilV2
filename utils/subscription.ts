@@ -362,12 +362,56 @@ export async function listRedeemedCodes(): Promise<Array<{
   }));
 }
 
-// ── Trial 15 dias (idempotente) ────────────────────────────────────────────
+// ── Trial 15 dias (one-time lifetime por cuenta) ───────────────────────────
+
+/**
+ * Consulta Supabase: ¿este userId ya uso su trial alguna vez?
+ * Fuente de verdad remota — sobrevive a revocaciones y reinstalaciones.
+ * Fail-closed: ante error de red devuelve true para no permitir reabuso.
+ */
+export async function hasUsedTrial(userId: string): Promise<boolean> {
+  if (!userId || userId === 'default') return false;
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/user_trial_usage?user_id=eq.${encodeURIComponent(userId)}&select=user_id&limit=1`,
+      {
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        },
+      },
+    );
+    if (!res.ok) return true;
+    const rows = await res.json();
+    return Array.isArray(rows) && rows.length > 0;
+  } catch {
+    return true;
+  }
+}
 
 export async function activateTrial(userId: string): Promise<void> {
-  // Solo activar si no hay suscripcion previa para este usuario
+  if (!userId || userId === 'default') return;
+
+  // Guard remoto: si ya uso trial alguna vez, NO reactivar
+  const used = await hasUsedTrial(userId);
+  if (used) throw new Error('Ya utilizaste tu periodo de prueba gratuito.');
+
   const existing = await AsyncStorage.getItem(keySubExpires(userId));
   if (existing) return;
+
+  await fetch(`${SUPABASE_URL}/rest/v1/user_trial_usage`, {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=ignore-duplicates,return=minimal',
+    },
+    body: JSON.stringify({
+      user_id: userId,
+      used_at: new Date().toISOString(),
+    }),
+  });
 
   const trialExpires = new Date();
   trialExpires.setDate(trialExpires.getDate() + 15);

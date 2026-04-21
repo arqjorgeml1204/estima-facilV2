@@ -19,7 +19,30 @@ import {
   deleteEstimacion,
   deleteProyecto,
   incrementarContadoresProyecto,
+  getTotalEstimadoPorProyecto,
 } from '../../db/database';
+
+function getISOWeek(d: Date): number {
+  const date = new Date(d);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + 3 - (date.getDay() + 6) % 7);
+  const week1 = new Date(date.getFullYear(), 0, 4);
+  return 1 + Math.round(((date.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+}
+
+// Parsea "DD/MM/YYYY" o ISO; retorna null si no reconoce formato (evita NaN en getISOWeek).
+function parseFechaEst(s: string): Date | null {
+  if (!s) return null;
+  const parts = s.split('/');
+  if (parts.length === 3) {
+    const d = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+    const y = parseInt(parts[2], 10);
+    if (d > 0 && m > 0 && y > 0) return new Date(y, m - 1, d);
+  }
+  const iso = new Date(s);
+  return isNaN(iso.getTime()) ? null : iso;
+}
 
 interface Proyecto {
   id: number;
@@ -42,6 +65,7 @@ interface Estimacion {
   id: number;
   numero: number;
   semana: number;
+  week_number?: number;
   periodo_desde: string;
   periodo_hasta: string;
   fecha: string;
@@ -54,14 +78,17 @@ export default function ProyectoDashboard() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [proyecto, setProyecto]       = useState<Proyecto | null>(null);
   const [estimaciones, setEstimaciones] = useState<Estimacion[]>([]);
+  const [estimadoTotal, setEstimadoTotal] = useState(0);
   const [loading, setLoading]         = useState(true);
 
   const load = async () => {
     setLoading(true);
     const p = await getProyectoById(Number(id));
     const e = await getEstimacionesByProyecto(Number(id));
+    const total = await getTotalEstimadoPorProyecto(Number(id));
     setProyecto(p as Proyecto);
     setEstimaciones(e as Estimacion[]);
+    setEstimadoTotal(total);
     setLoading(false);
   };
 
@@ -153,10 +180,13 @@ export default function ProyectoDashboard() {
     );
   }
 
-  const estimadoAcumulado = estimaciones.reduce((s, e) => s + (e.subtotal || 0), 0);
+  // Usa MAX(importe_acumulado) por concepto para incluir cantidad_anterior del modo actualizacion.
+  const estimadoAcumulado = estimadoTotal;
+  const restante = Math.max(0, proyecto.monto_contrato - estimadoAcumulado);
   const porcentaje = proyecto.monto_contrato > 0
     ? Math.round((estimadoAcumulado / proyecto.monto_contrato) * 100)
     : 0;
+  const semanaActualISO = getISOWeek(new Date());
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
@@ -222,7 +252,7 @@ export default function ProyectoDashboard() {
                 Restante
               </Text>
               <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '800', marginTop: 2 }}>
-                ${(proyecto.monto_contrato - estimadoAcumulado).toLocaleString('es-MX', { minimumFractionDigits: 0 })}
+                ${restante.toLocaleString('es-MX', { minimumFractionDigits: 0 })}
               </Text>
             </View>
             <View style={{ flex: 1 }}>
@@ -245,7 +275,7 @@ export default function ProyectoDashboard() {
 
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>
             <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10 }}>
-              Semana {proyecto.semana_actual} · {proyecto.total_unidades} unidades
+              Semana {semanaActualISO} · {proyecto.total_unidades} unidades
             </Text>
             <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10 }}>
               {proyecto.prototipo}
@@ -305,7 +335,13 @@ export default function ProyectoDashboard() {
               </TouchableOpacity>
             </View>
           ) : (
-            estimaciones.map((est) => (
+            estimaciones.map((est) => {
+              // week_number guarda la semana ISO original al crear; si no existe, recomputa desde periodo_desde.
+              const fechaDesde = parseFechaEst(est.periodo_desde);
+              const semanaISO = (est.week_number && est.week_number > 0)
+                ? est.week_number
+                : (fechaDesde ? getISOWeek(fechaDesde) : est.semana);
+              return (
               <View
                 key={est.id}
                 style={{
@@ -334,7 +370,7 @@ export default function ProyectoDashboard() {
                       </View>
                     </View>
                     <Text style={{ fontSize: 11, color: '#737685' }}>
-                      Sem. {est.semana} · {est.periodo_desde} – {est.periodo_hasta}
+                      Sem. {semanaISO} · {est.periodo_desde} – {est.periodo_hasta}
                     </Text>
                   </View>
                   <Text style={{ fontSize: 14, fontWeight: '800', color: '#003d9b' }}>
@@ -384,7 +420,8 @@ export default function ProyectoDashboard() {
                   </TouchableOpacity>
                 </View>
               </View>
-            ))
+              );
+            })
           )}
         </View>
 

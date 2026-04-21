@@ -28,6 +28,7 @@ import {
   getSubscriptionExpiry,
   redeemCode,
   activateTrial,
+  hasUsedTrial,
 } from '../utils/subscription';
 import { getCurrentUserId } from '../utils/auth';
 import { generateToken } from '../utils/tokenGenerator';
@@ -87,6 +88,7 @@ export default function SuscripcionScreen() {
   const [redeeming, setRedeeming]     = useState(false);
 
   const [canTrial, setCanTrial]         = useState(false);
+  const [trialUsed, setTrialUsed]       = useState(false);
 
   // ── Payment modal state ─────────────────────────────────────────────────
   const [modalStep, setModalStep]       = useState<ModalStep>('none');
@@ -98,14 +100,14 @@ export default function SuscripcionScreen() {
 
   useEffect(() => {
     loadSubscriptionStatus();
-    // Verificar si el usuario puede hacer trial
     const checkTrial = async () => {
       try {
         const stored = await AsyncStorage.getItem('@estimafacil:user_id');
-        if (stored) {
-          const subType = await getSubscriptionType(stored);
-          setCanTrial(subType === null);
-        }
+        if (!stored) return;
+        const usedRemote = await hasUsedTrial(stored);
+        setTrialUsed(usedRemote);
+        const subType = await getSubscriptionType(stored);
+        setCanTrial(!usedRemote && subType === null);
       } catch (_) {}
     };
     checkTrial();
@@ -136,11 +138,13 @@ export default function SuscripcionScreen() {
       const stored = await AsyncStorage.getItem('@estimafacil:user_id');
       if (!stored) return;
       await activateTrial(stored);
+      setTrialUsed(true);
+      setCanTrial(false);
       Alert.alert('¡Prueba activada!', 'Tienes 15 días de acceso gratuito a EstimaFácil®.', [
         { text: 'Comenzar', onPress: () => router.replace('/(tabs)') }
       ]);
-    } catch (e) {
-      Alert.alert('Error', 'No se pudo activar la prueba. Intenta de nuevo.');
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo activar la prueba. Intenta de nuevo.');
     }
   };
 
@@ -422,8 +426,8 @@ export default function SuscripcionScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Prueba gratuita — solo si nunca tuvo suscripcion */}
-        {canTrial && (
+        {/* Prueba gratuita — one-time lifetime por cuenta */}
+        {canTrial ? (
           <TouchableOpacity
             onPress={handleActivateTrial}
             style={{
@@ -443,7 +447,26 @@ export default function SuscripcionScreen() {
               Sin costo · Sin compromiso · Solo por primera vez
             </Text>
           </TouchableOpacity>
-        )}
+        ) : trialUsed ? (
+          <View
+            style={{
+              borderWidth: 2,
+              borderColor: '#c3c6d6',
+              backgroundColor: '#f3f4f6',
+              borderRadius: 12,
+              padding: 16,
+              marginBottom: 16,
+              alignItems: 'center',
+            }}
+          >
+            <Text style={{ color: '#737685', fontWeight: 'bold', fontSize: 14 }}>
+              PRUEBA GRATUITA NO DISPONIBLE
+            </Text>
+            <Text style={{ color: '#737685', fontSize: 12, marginTop: 4, textAlign: 'center' }}>
+              Ya utilizaste tu periodo de prueba gratuito
+            </Text>
+          </View>
+        ) : null}
 
         {/* Planes disponibles */}
         <View style={{

@@ -132,7 +132,12 @@ export default function PdfSoporte() {
   const [evidencias, setEvidencias] = useState<any[]>([]);
   const [croquisList, setCroquisList] = useState<any[]>([]);
   const [editedEstaEst, setEditedEstaEst] = useState<Record<string, string>>({});
-  const [editingActividad, setEditingActividad] = useState<string | null>(null);
+  // PARTE 1: ANT y AVANCE tambien editables. `editedAnt` sobreescribe el ant
+  // local (no persiste a DB). `editedAvance` se convierte a estaEst via
+  // estaEst = avancePct * factor - ant y se deriva hacia editedEstaEst.
+  const [editedAnt, setEditedAnt] = useState<Record<string, string>>({});
+  const [editedAvance, setEditedAvance] = useState<Record<string, string>>({});
+  const [editingField, setEditingField] = useState<{ key: string; field: 'ant' | 'estaEst' | 'avance' } | null>(null);
   const [obraAsync, setObraAsync] = useState<string>('VISTAS DEL NEVADO');
   const [frenteAsync, setFrenteAsync] = useState<string>('FRENTE 01');
   // Retención: arranca en 5% (default back-compat). Si el proyecto trae
@@ -296,21 +301,28 @@ export default function PdfSoporte() {
 
   // Aplicar overrides manuales y calcular derivados (#16: cap estaEst a factor)
   // BUG-1: Filtrar conceptos con importe del periodo actual = $0
+  // PARTE 1: claves de override usan `actividad` (back-compat con editedEstaEst
+  // existente). ANT editada no persiste — solo override local en la pantalla.
   const computedRows: ComputedRow[] = groupedRows.map(g => {
-    const rawEstaEst = editedEstaEst[g.key] !== undefined
-      ? parseFloat(editedEstaEst[g.key]) || 0
+    const antOverrideStr = editedAnt[g.actividad];
+    const antParsed = antOverrideStr !== undefined ? parseFloat(antOverrideStr) : NaN;
+    const effectiveAnt = !isNaN(antParsed) && antParsed >= 0
+      ? Math.min(antParsed, g.factor)
+      : g.ant;
+    const rawEstaEst = editedEstaEst[g.actividad] !== undefined
+      ? parseFloat(editedEstaEst[g.actividad]) || 0
       : g.estaEstBase;
-    const maxAllowed = Math.max(0, g.factor - g.ant);
-    const estaEst = Math.min(rawEstaEst, maxAllowed);
-    const acum = g.ant + estaEst;
+    const maxAllowed = Math.max(0, g.factor - effectiveAnt);
+    const estaEst = Math.min(Math.max(0, rawEstaEst), maxAllowed);
+    const acum = effectiveAnt + estaEst;
     const importeContrato = g.costo_unitario * g.factor;
-    const importeAnt = g.ant * g.costo_unitario;
+    const importeAnt = effectiveAnt * g.costo_unitario;
     const importeEstaEst = estaEst * g.costo_unitario;
     const importeAcum = importeAnt + importeEstaEst;
     const avance = importeContrato > 0
       ? (importeAcum / importeContrato) * 100
       : 0;
-    return { ...g, estaEst, acum, importeContrato, importeAnt, importeEstaEst, importeAcum, avance };
+    return { ...g, ant: effectiveAnt, estaEst, acum, importeContrato, importeAnt, importeEstaEst, importeAcum, avance };
   }).filter(r => r.importeEstaEst > 0);
 
   // Totales locales recalculados en tiempo real (#15: retención editable)
@@ -439,10 +451,19 @@ export default function PdfSoporte() {
     }
 
     // ── Data rows HTML ──────────────────────────────────────────────────────
+    // Prototipo va con rowspan cubriendo todas las filas de datos (PARTE 4.1).
+    // Las filas grp-hdr no cuentan: usan colspan=16.
+    const totalDataRows = paqueteGroups.reduce((n, g) => n + g.rows.length, 0);
+    let dataRowIdx = 0;
     const bodyHtml = paqueteGroups.map(g => {
       const groupHeader = `<tr class="grp-hdr"><td colspan="16">${g.paquete || 'SIN PAQUETE'}</td></tr>`;
-      const rows = g.rows.map(r => `<tr>
-        <td class="c">${prototipo}</td>
+      const rows = g.rows.map(r => {
+        const protoCell = dataRowIdx === 0
+          ? `<td class="c" rowspan="${totalDataRows}">${prototipo}</td>`
+          : '';
+        dataRowIdx++;
+        return `<tr>
+        ${protoCell}
         <td class="txt">${r.paquete}</td>
         <td class="txt">${r.subpaquete}</td>
         <td class="act">${r.actividad}</td>
@@ -458,18 +479,10 @@ export default function PdfSoporte() {
         <td class="n hi">$ ${fmt(r.importeEstaEst)}</td>
         <td class="n">$ ${fmt(r.importeAcum)}</td>
         <td class="c">${r.avance.toFixed(1)}%</td>
-      </tr>`).join('');
+      </tr>`;
+      }).join('');
       return groupHeader + rows;
     }).join('');
-
-    // ── Totals for data table columns ───────────────────────────────────────
-    const totalImporteContrato = computedRows.reduce((s, r) => s + r.importeContrato, 0);
-    const totalAntVol = computedRows.reduce((s, r) => s + r.ant, 0);
-    const totalEstaVol = computedRows.reduce((s, r) => s + r.estaEst, 0);
-    const totalAcumVol = computedRows.reduce((s, r) => s + r.acum, 0);
-    const totalAntImp = estimadoAcumulado;
-    const totalAcumImp = computedRows.reduce((s, r) => s + r.importeAcum, 0);
-    const totalAvance = totalImporteContrato > 0 ? (totalAcumImp / totalImporteContrato) * 100 : 0;
 
     // ── Hoja 2: Evidencia fotográfica — 6 fotos por hoja (3 cols × 2 filas)
     let evidenciaPages = '';
@@ -646,17 +659,6 @@ ${descripcionHtml}
   </thead>
   <tbody>
     ${bodyHtml}
-    <tr class="footer-row">
-      <td colspan="8" class="footer-label">TOTALES</td>
-      <td class="footer-val">$ ${fmt(totalImporteContrato)}</td>
-      <td class="footer-val">${fmt(totalAntVol)}</td>
-      <td class="footer-val">${fmt(totalEstaVol)}</td>
-      <td class="footer-val">${fmt(totalAcumVol)}</td>
-      <td class="footer-val">$ ${fmt(totalAntImp)}</td>
-      <td class="footer-val" style="color:#006100">$ ${fmt(localSubtotal)}</td>
-      <td class="footer-val">$ ${fmt(totalAcumImp)}</td>
-      <td class="footer-val">${totalAvance.toFixed(1)}%</td>
-    </tr>
   </tbody>
 </table>
 
@@ -722,11 +724,40 @@ ${croquesPages}
       if (prev[actividad] !== undefined) return prev;
       return { ...prev, [actividad]: String(estaEstBase) };
     });
-    setEditingActividad(actividad);
+    setEditingField({ key: actividad, field: 'estaEst' });
+  }, []);
+
+  const handleStartEditAnt = useCallback((actividad: string, antBase: number) => {
+    setEditedAnt(prev => {
+      if (prev[actividad] !== undefined) return prev;
+      return { ...prev, [actividad]: String(antBase) };
+    });
+    setEditingField({ key: actividad, field: 'ant' });
+  }, []);
+
+  const handleStartEditAvance = useCallback((actividad: string, avanceBase: number) => {
+    setEditedAvance(prev => {
+      if (prev[actividad] !== undefined) return prev;
+      return { ...prev, [actividad]: avanceBase.toFixed(1) };
+    });
+    setEditingField({ key: actividad, field: 'avance' });
   }, []);
 
   const handleStopEdit = useCallback(() => {
-    setEditingActividad(null);
+    setEditingField(null);
+  }, []);
+
+  // Cuando el usuario edita AVANCE, derivamos estaEst manteniendo ant fijo:
+  //   acum = (avancePct/100) * factor
+  //   estaEst = max(0, acum - ant)
+  // Esto actualiza editedEstaEst para que el resto de cálculos reflejen.
+  const handleAvanceChange = useCallback((actividad: string, text: string, factor: number, antVal: number) => {
+    setEditedAvance(prev => ({ ...prev, [actividad]: text }));
+    const pct = parseFloat(text.replace(',', '.'));
+    if (isNaN(pct) || factor <= 0) return;
+    const nuevoAcum = (pct / 100) * factor;
+    const nuevoEstaEst = Math.max(0, nuevoAcum - antVal);
+    setEditedEstaEst(prev => ({ ...prev, [actividad]: String(nuevoEstaEst) }));
   }, []);
 
   const handlePrint = async () => {
@@ -884,20 +915,52 @@ ${croquesPages}
                   <Text style={{ fontSize: 9, color: '#737685', fontWeight: '700' }}>{row.unidad}</Text>
                 </View>
 
-                {/* Columnas: ANT | ESTA EST (editable) | ACUM | AVANCE% */}
+                {/* Columnas: ANT (editable) | ESTA EST (editable) | ACUM | AVANCE% (editable) */}
+                {(() => {
+                  const isEditingAnt = editingField?.key === row.actividad && editingField.field === 'ant';
+                  const isEditingEst = editingField?.key === row.actividad && editingField.field === 'estaEst';
+                  const isEditingAv = editingField?.key === row.actividad && editingField.field === 'avance';
+                  const antEdited = editedAnt[row.actividad] !== undefined;
+                  const avEdited = editedAvance[row.actividad] !== undefined;
+                  const antBg = isEditingAnt || antEdited ? '#fff3e0' : '#f4f5f8';
+                  const avBg = isEditingAv || avEdited ? '#e1f5fe' : '#f4f5f8';
+                  return (
                 <View style={{ flexDirection: 'row', gap: 6 }}>
-                  {/* ANT. */}
-                  <View style={{ flex: 1, backgroundColor: '#f4f5f8', borderRadius: 6, padding: 6 }}>
+                  {/* ANT. — editable inline (override local, no persiste) */}
+                  <View style={{ flex: 1, backgroundColor: antBg, borderRadius: 6, padding: 6 }}>
                     <Text style={{ fontSize: 8, color: '#737685', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3 }}>ANT.</Text>
-                    <Text style={{ fontSize: 11, fontWeight: '800', color: '#191c1e', marginTop: 1 }}>
-                      {row.ant % 1 === 0 ? row.ant : row.ant.toFixed(2)}
-                    </Text>
+                    {isEditingAnt ? (
+                      <TextInput
+                        value={editedAnt[row.actividad] ?? String(row.ant)}
+                        onChangeText={(t) => setEditedAnt(prev => ({ ...prev, [row.actividad]: t }))}
+                        onBlur={handleStopEdit}
+                        onSubmitEditing={handleStopEdit}
+                        keyboardType="numeric"
+                        autoFocus
+                        style={{
+                          fontSize: 11, fontWeight: '800', color: '#191c1e',
+                          padding: 0, marginTop: 1,
+                          borderBottomWidth: 1, borderBottomColor: '#e65100',
+                        }}
+                      />
+                    ) : (
+                      <TouchableOpacity
+                        onPress={() => handleStartEditAnt(row.actividad, row.ant)}
+                        activeOpacity={0.7}
+                        style={{ flexDirection: 'row', alignItems: 'center', marginTop: 1, gap: 4 }}
+                      >
+                        <Text style={{ fontSize: 11, fontWeight: '800', color: '#191c1e' }}>
+                          {row.ant % 1 === 0 ? row.ant : row.ant.toFixed(2)}
+                        </Text>
+                        <MaterialIcons name="edit" size={10} color="#737685" />
+                      </TouchableOpacity>
+                    )}
                   </View>
 
                   {/* ESTA EST. — editable inline */}
                   <View style={{ flex: 1, backgroundColor: '#e8f5e9', borderRadius: 6, padding: 6 }}>
                     <Text style={{ fontSize: 8, color: '#737685', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3 }}>ESTA EST.</Text>
-                    {editingActividad === row.actividad ? (
+                    {isEditingEst ? (
                       <TextInput
                         value={editedEstaEst[row.actividad] ?? String(row.estaEstBase)}
                         onChangeText={(t) => setEditedEstaEst(prev => ({ ...prev, [row.actividad]: t }))}
@@ -933,14 +996,39 @@ ${croquesPages}
                     </Text>
                   </View>
 
-                  {/* AVANCE % */}
-                  <View style={{ flex: 1, backgroundColor: '#f4f5f8', borderRadius: 6, padding: 6 }}>
+                  {/* AVANCE % — editable inline (deriva estaEst) */}
+                  <View style={{ flex: 1, backgroundColor: avBg, borderRadius: 6, padding: 6 }}>
                     <Text style={{ fontSize: 8, color: '#737685', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3 }}>AVANCE</Text>
-                    <Text style={{ fontSize: 11, fontWeight: '800', color: '#003d9b', marginTop: 1 }}>
-                      {row.avance.toFixed(1)}%
-                    </Text>
+                    {isEditingAv ? (
+                      <TextInput
+                        value={editedAvance[row.actividad] ?? row.avance.toFixed(1)}
+                        onChangeText={(t) => handleAvanceChange(row.actividad, t, row.factor, row.ant)}
+                        onBlur={handleStopEdit}
+                        onSubmitEditing={handleStopEdit}
+                        keyboardType="numeric"
+                        autoFocus
+                        style={{
+                          fontSize: 11, fontWeight: '800', color: '#003d9b',
+                          padding: 0, marginTop: 1,
+                          borderBottomWidth: 1, borderBottomColor: '#0277bd',
+                        }}
+                      />
+                    ) : (
+                      <TouchableOpacity
+                        onPress={() => handleStartEditAvance(row.actividad, row.avance)}
+                        activeOpacity={0.7}
+                        style={{ flexDirection: 'row', alignItems: 'center', marginTop: 1, gap: 4 }}
+                      >
+                        <Text style={{ fontSize: 11, fontWeight: '800', color: '#003d9b' }}>
+                          {row.avance.toFixed(1)}%
+                        </Text>
+                        <MaterialIcons name="edit" size={10} color="#737685" />
+                      </TouchableOpacity>
+                    )}
                   </View>
                 </View>
+                  );
+                })()}
 
                 {/* Importe Esta Est. */}
                 <View style={{ marginTop: 6, alignItems: 'flex-end' }}>

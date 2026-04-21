@@ -15,8 +15,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 import { initDatabase, getProyectos, deleteProyecto, updateProyectoAlias, getTotalEstimadoPorProyecto } from '../../db/database';
 import { getCurrentUserId } from '../../utils/auth';
-import { hasActiveSubscription, activateTrial, getSubscriptionType, syncSubscriptionFromCloud } from '../../utils/subscription';
+import { hasActiveSubscription, syncSubscriptionFromCloud } from '../../utils/subscription';
+import { getProyectoDisplayWeek } from '../../utils/weekUtils';
 import ContractUploadModal from '../../components/ContractUploadModal';
+import BlockScreen from '../../components/BlockScreen';
 
 const STORAGE_KEY_FIRST_TIME = '@estimafacil:firstTime';
 
@@ -30,6 +32,7 @@ interface Proyecto {
   numero_estimacion_actual: number;
   alias?: string;
   monto_restante?: number;
+  display_week?: number;
 }
 
 export default function ProyectosScreen() {
@@ -38,10 +41,10 @@ export default function ProyectosScreen() {
   const [showModal, setShowModal]  = useState(false);
   const [editingId, setEditingId]  = useState<number | null>(null);
   const [editAlias, setEditAlias]  = useState('');
+  const [blocked, setBlocked]      = useState<boolean | null>(null);
 
   useEffect(() => {
     (async () => {
-      // Verificar sesion activa antes de mostrar la lista
       const logged = await AsyncStorage.getItem('@estimafacil:logged');
       if (logged !== 'true') {
         router.replace('/(auth)/login');
@@ -54,15 +57,35 @@ export default function ProyectosScreen() {
         setShowModal(true);
         await AsyncStorage.setItem(STORAGE_KEY_FIRST_TIME, 'done');
       }
+      await evaluateSubscriptionGate();
       await loadProyectos();
     })();
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      loadProyectos();
+      (async () => {
+        await evaluateSubscriptionGate();
+        await loadProyectos();
+      })();
     }, [])
   );
+
+  // Sync con Supabase + re-lee local; fail-open deja al user pasar.
+  const evaluateSubscriptionGate = async () => {
+    try {
+      const userId = await getCurrentUserId();
+      const sync = await syncSubscriptionFromCloud(userId, 5000);
+      if (sync.timedOut || sync.offline) {
+        setBlocked(false);
+        return;
+      }
+      const active = await hasActiveSubscription(userId);
+      setBlocked(!active);
+    } catch {
+      setBlocked(false);
+    }
+  };
 
   const loadProyectos = async () => {
     setLoading(true);
@@ -70,72 +93,21 @@ export default function ProyectosScreen() {
       const userId = await getCurrentUserId();
       const data = await getProyectos(userId);
 
-      // Calcular monto_restante para cada proyecto
       const proyectosConRestante = await Promise.all(
         (data as Proyecto[]).map(async (p) => {
           const totalEstimado = await getTotalEstimadoPorProyecto(p.id);
-          return { ...p, monto_restante: Math.max(0, p.monto_contrato - totalEstimado) };
+          const displayWeek = await getProyectoDisplayWeek(p.id);
+          return {
+            ...p,
+            monto_restante: Math.max(0, p.monto_contrato - totalEstimado),
+            display_week: displayWeek,
+          };
         })
       );
       setProyectos(proyectosConRestante);
     } finally {
       setLoading(false);
     }
-
-    // ── Gate de suscripcion (NO bloquea la UI) ────────────────────────────
-    // Sync contra Supabase primero (5s timeout, fail-open) y luego re-leer
-    // el estado local. Si remoto dice revocado → limpiar local y redirigir.
-    // Esto corre DESPUES de setLoading(false) para que la lista se pinte ya.
-    (async () => {
-      try {
-        const userId = await getCurrentUserId();
-
-        const sync = await syncSubscriptionFromCloud(userId, 5000);
-
-        if (sync.revoked) {
-          // Sub local ya fue borrada por syncSubscriptionFromCloud.
-          Alert.alert(
-            'Tu codigo fue revocado',
-            'Tu suscripcion fue revocada por el administrador. Canjea un codigo nuevo o activa un plan para continuar.',
-            [
-              {
-                text: 'Ir a suscripcion',
-                onPress: () => router.replace('/suscripcion'),
-              },
-            ],
-          );
-          return;
-        }
-
-        // Releer estado local (ya esta fresco tras el sync, o sin cambios si fail-open)
-        const active = await hasActiveSubscription(userId);
-        if (!active) {
-          const subType = await getSubscriptionType(userId);
-          const trialOption = subType === null
-            ? [{
-                text: 'Activar prueba gratuita',
-                onPress: async () => {
-                  await activateTrial(userId);
-                  router.replace('/(tabs)');
-                },
-              }]
-            : [];
-          Alert.alert(
-            'Suscripcion requerida',
-            subType === null
-              ? 'No tienes una suscripcion activa. Activa tu prueba gratuita de 15 dias o elige un plan.'
-              : 'Tu periodo de prueba ha vencido. Activa tu suscripcion para continuar usando EstimaFacil.',
-            [
-              ...trialOption,
-              { text: 'Activar ahora', onPress: () => router.push('/suscripcion') },
-              { text: 'Cerrar', style: 'cancel' },
-            ],
-          );
-        }
-      } catch (_) {
-        // Nunca bloquear la UI por el gate.
-      }
-    })();
   };
 
   const handleContractLoaded = async (proyectoId: number) => {
@@ -203,7 +175,7 @@ export default function ProyectosScreen() {
               </View>
             ) : null}
             <Text style={{ fontSize: 10, color: '#737685', fontWeight: '600' }}>
-              ESTIM #{item.numero_estimacion_actual} | SEM. #{item.semana_actual}
+              ESTIM #{item.numero_estimacion_actual} | SEM. #{item.display_week ?? item.semana_actual}
             </Text>
           </View>
           <Text style={{ fontSize: 13, fontWeight: '700', color: '#191c1e', lineHeight: 18 }}>
@@ -269,6 +241,10 @@ export default function ProyectosScreen() {
     </TouchableOpacity>
     );
   };
+
+  if (blocked === true) {
+    return <BlockScreen />;
+  }
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#f8f9fb' }}>

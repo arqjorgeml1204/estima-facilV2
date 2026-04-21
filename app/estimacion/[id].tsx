@@ -138,6 +138,14 @@ const ConceptoRow = React.memo(function ConceptoRow({
   const cantEsta = detalle?.cantidad_esta_est ?? 0;
   const isFullyBlocked = effectiveAnterior >= concepto.factor;
 
+  // PARTE 2: soporte para cantidad_esta_est fraccional. La celda parcial
+  // (si cantEsta tiene fracción) se pinta naranja con badge "XX%".
+  const cantEstaFloor = Math.floor(cantEsta);
+  const cantEstaFraction = cantEsta - cantEstaFloor;
+  const hasPartial = cantEstaFraction > 0;
+  const partialIdx = effectiveAnterior + cantEstaFloor;
+  const cantEstaCeil = hasPartial ? cantEstaFloor + 1 : cantEstaFloor;
+
   const getCellVisual = (colIdx: number): { bg: string; text: string | null; blocked: boolean; badgeText: string | null } => {
     if (colIdx < priorLocked) {
       return { bg: '#1A7A3C', text: null, blocked: true, badgeText: priorSemana > 0 ? `S.${priorSemana}` : null };
@@ -148,15 +156,26 @@ const ConceptoRow = React.memo(function ConceptoRow({
       }
       return { bg: '#1A7A3C', text: null, blocked: true, badgeText: null };
     }
-    if (colIdx < effectiveAnterior + cantEsta) {
+    if (colIdx < effectiveAnterior + cantEstaFloor) {
       return { bg: '#4CAF50', text: String(currentWeek), blocked: modoActualizacion, badgeText: null };
+    }
+    if (hasPartial && colIdx === partialIdx) {
+      return {
+        bg: '#FF9800',
+        text: null,
+        blocked: false,
+        badgeText: `${Math.round(cantEstaFraction * 100)}%`,
+      };
     }
     return { bg: '#E0E0E0', text: null, blocked: false, badgeText: null };
   };
 
+  const formatQty = (n: number): string =>
+    n % 1 === 0 ? String(n) : n.toFixed(1).replace(/\.0$/, '');
+
   const getUpdateCounter = (): string => {
     const available = concepto.factor - priorLocked - cantEsta;
-    return `${modeActAdditions}/${available}`;
+    return `${formatQty(modeActAdditions)}/${formatQty(available)}`;
   };
 
   return (
@@ -213,7 +232,7 @@ const ConceptoRow = React.memo(function ConceptoRow({
           fontSize: 10, fontWeight: '700', marginTop: 2,
           color: (effectiveAnterior + cantEsta) >= concepto.factor ? '#004f11' : (effectiveAnterior + cantEsta) > 0 ? '#003d9b' : '#737685',
         }}>
-          {effectiveAnterior + cantEsta}/{concepto.factor}
+          {formatQty(effectiveAnterior + cantEsta)}/{formatQty(concepto.factor)}
         </Text>
         {priorLocked > 0 && !modoActualizacion && (
           <Text style={{ fontSize: 8, fontWeight: '600', color: '#737685', marginTop: 1 }}>
@@ -715,6 +734,16 @@ export default function EstimacionGrid() {
 
     // Locked cells (prior + mode act)
     if (colIdx < effectiveAnterior) return;
+
+    // PARTE 2: celda parcial (última esta-est con fracción) → abrir input manual
+    // para re-editar la cantidad fraccional en vez de decrementar por 1.
+    const partialCellIdx = effectiveAnterior + Math.floor(cantEsta);
+    const hasFraction = cantEsta - Math.floor(cantEsta) > 0;
+    if (hasFraction && colIdx === partialCellIdx) {
+      setModalConcepto(concepto);
+      setModalVisible(true);
+      return;
+    }
 
     const adjustedIdx = colIdx - effectiveAnterior;
     if (adjustedIdx < cantEsta) {
