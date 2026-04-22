@@ -17,6 +17,7 @@ import { initDatabase, getProyectos, deleteProyecto, updateProyectoAlias, getTot
 import { getCurrentUserId } from '../../utils/auth';
 import { hasActiveSubscription, syncSubscriptionFromCloud } from '../../utils/subscription';
 import { getProyectoDisplayWeek } from '../../utils/weekUtils';
+import { getObras, getObraColorById, getObraColorFallback, Obra } from '../../utils/obras';
 import ContractUploadModal from '../../components/ContractUploadModal';
 import BlockScreen from '../../components/BlockScreen';
 
@@ -33,6 +34,7 @@ interface Proyecto {
   alias?: string;
   monto_restante?: number;
   display_week?: number;
+  obra_id?: string | null;
 }
 
 export default function ProyectosScreen() {
@@ -42,6 +44,8 @@ export default function ProyectosScreen() {
   const [editingId, setEditingId]  = useState<number | null>(null);
   const [editAlias, setEditAlias]  = useState('');
   const [blocked, setBlocked]      = useState<boolean | null>(null);
+  // Map id -> Obra para pintar badges en las cards. Re-carga con cada focus.
+  const [obrasMap, setObrasMap]    = useState<Record<string, Obra>>({});
 
   useEffect(() => {
     (async () => {
@@ -57,7 +61,7 @@ export default function ProyectosScreen() {
         setShowModal(true);
         await AsyncStorage.setItem(STORAGE_KEY_FIRST_TIME, 'done');
       }
-      await evaluateSubscriptionGate();
+      await evaluateSubscriptionGate(true);
       await loadProyectos();
     })();
   }, []);
@@ -65,25 +69,40 @@ export default function ProyectosScreen() {
   useFocusEffect(
     useCallback(() => {
       (async () => {
-        await evaluateSubscriptionGate();
+        // Al volver a la tab: re-evaluar suscripción y re-cargar proyectos.
+        // Pasamos isFirstMount=false para preservar el estado previo si la red falla.
+        await evaluateSubscriptionGate(false);
         await loadProyectos();
       })();
     }, [])
   );
 
-  // Sync con Supabase + re-lee local; fail-open deja al user pasar.
-  const evaluateSubscriptionGate = async () => {
+  // Sync con Supabase + re-lee local.
+  // - 1er mount (isFirstMount=true): fail-open — si hay timeout/offline, dejar pasar.
+  // - Foco posterior (isFirstMount=false): re-checar local; preservar bloqueo si la red falla,
+  //   para evitar que el usuario "escape" del BlockScreen simplemente navegando entre tabs.
+  const evaluateSubscriptionGate = async (isFirstMount: boolean) => {
     try {
       const userId = await getCurrentUserId();
       const sync = await syncSubscriptionFromCloud(userId, 5000);
       if (sync.timedOut || sync.offline) {
-        setBlocked(false);
+        // Sin respuesta del servidor: decidir con el estado local actual.
+        if (isFirstMount) {
+          // Fail-open en arranque para no bloquear al usuario offline en el primer ingreso.
+          setBlocked(false);
+        } else {
+          // En focus posterior: bloquear si local dice que no hay plan activo.
+          // Esto impide que el usuario "escape" del BlockScreen navegando entre tabs.
+          const localActive = await hasActiveSubscription(userId);
+          setBlocked(!localActive);
+        }
         return;
       }
       const active = await hasActiveSubscription(userId);
       setBlocked(!active);
     } catch {
-      setBlocked(false);
+      // Error inesperado: en 1er mount fail-open; en focus posterior preservar bloqueo previo.
+      if (isFirstMount) setBlocked(false);
     }
   };
 
@@ -92,6 +111,12 @@ export default function ProyectosScreen() {
     try {
       const userId = await getCurrentUserId();
       const data = await getProyectos(userId);
+
+      // Cargar obras en paralelo para pintar badges en las cards.
+      const obras = await getObras();
+      const map: Record<string, Obra> = {};
+      for (const o of obras) map[o.id] = o;
+      setObrasMap(map);
 
       const proyectosConRestante = await Promise.all(
         (data as Proyecto[]).map(async (p) => {
@@ -144,6 +169,22 @@ export default function ProyectosScreen() {
 
   const renderProyecto = ({ item }: { item: Proyecto }) => {
     const aditivaSuffix = item.numero_contrato?.match(/_([A-Z]\d+)$/)?.[1];
+    // Badge obra: si obra_id existe en el map -> badge con color + nombre de obra.
+    // Si obra_id es null (legacy) -> "Sin obra" gris.
+    // Si obra_id apunta a obra eliminada -> "Obra eliminada" gris.
+    const obraDelProyecto = item.obra_id ? obrasMap[item.obra_id] : null;
+    let obraBadgeLabel: string;
+    let obraBadgeColor: string;
+    if (!item.obra_id) {
+      obraBadgeLabel = 'Sin obra';
+      obraBadgeColor = getObraColorFallback();
+    } else if (!obraDelProyecto) {
+      obraBadgeLabel = 'Obra eliminada';
+      obraBadgeColor = getObraColorFallback();
+    } else {
+      obraBadgeLabel = obraDelProyecto.nombre;
+      obraBadgeColor = getObraColorById(item.obra_id);
+    }
     return (
     <TouchableOpacity
       onPress={() => router.push(`/proyecto/${item.id}` as any)}
@@ -159,6 +200,21 @@ export default function ProyectosScreen() {
         elevation: 2,
       }}
     >
+      {/* Badge de OBRA arriba de todo, resaltado con color por obra */}
+      <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+        <View style={{
+          backgroundColor: obraBadgeColor, borderRadius: 6,
+          paddingHorizontal: 10, paddingVertical: 4,
+          maxWidth: '100%',
+        }}>
+          <Text
+            numberOfLines={1}
+            style={{ color: '#ffffff', fontSize: 11, fontWeight: '800', letterSpacing: 0.5 }}
+          >
+            {obraBadgeLabel}
+          </Text>
+        </View>
+      </View>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>

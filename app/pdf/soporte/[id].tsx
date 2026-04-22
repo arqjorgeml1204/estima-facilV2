@@ -23,6 +23,7 @@ import {
   getEvidenciasByEstimacion, getCroquisByEstimacion,
   getConceptosByProyecto, getEstimadoAcumuladoPrevio,
 } from '../../../db/database';
+import { getObraActiva, migrateLegacyObra, Obra } from '../../../utils/obras';
 
 // ── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -140,6 +141,9 @@ export default function PdfSoporte() {
   const [editingField, setEditingField] = useState<{ key: string; field: 'ant' | 'estaEst' | 'avance' } | null>(null);
   const [obraAsync, setObraAsync] = useState<string>('VISTAS DEL NEVADO');
   const [frenteAsync, setFrenteAsync] = useState<string>('FRENTE 01');
+  // Obra activa (nueva estructura multi-obra). Si es null, el PDF usa
+  // fallback a los valores legacy (obra string + frente string).
+  const [obraActiva, setObraActiva] = useState<Obra | null>(null);
   // Retención: arranca en 5% (default back-compat). Si el proyecto trae
   // fondo_garantia_pct (nuevo) o fondo_garantia (legacy) lo usamos en cuanto
   // cargue `proyecto`.
@@ -153,10 +157,19 @@ export default function PdfSoporte() {
     (async () => {
       try {
         await initDatabase();
-        // Leer obra y frente desde AsyncStorage
-        const obraVal = await AsyncStorage.getItem('obra');
+        // Migracion legacy a modelo multi-obra (idempotente).
+        await migrateLegacyObra();
+        const activa = await getObraActiva();
+        setObraActiva(activa);
+        // Preferir obra activa (nuevo modelo). Fallback: legacy 'obra'.
+        if (activa?.nombre) {
+          setObraAsync(activa.nombre);
+        } else {
+          const obraVal = await AsyncStorage.getItem('obra');
+          if (obraVal) setObraAsync(obraVal);
+        }
+        // Frente legacy (deprecated pero aun visible en el header del PDF).
         const frenteVal = await AsyncStorage.getItem('frente');
-        if (obraVal) setObraAsync(obraVal);
         if (frenteVal) setFrenteAsync(frenteVal);
         const est = await getEstimacionById(Number(id));
         if (!est) { setLoading(false); return; }
@@ -589,7 +602,9 @@ export default function PdfSoporte() {
 
   /* ── Firmas ───────────────────────────────────────────── */
   .firmas { margin-top: 30px; display: flex; justify-content: space-around; }
-  .firma { text-align: center; border-top: 1px solid #000; padding-top: 4px; min-width: 150px; font-size: 8px; font-weight: 700; }
+  .firma { text-align: center; min-width: 160px; }
+  .firma-name { font-size: 9px; font-weight: 700; color: #191c1e; min-height: 14px; padding: 0 6px; border-bottom: 1px solid #000; padding-bottom: 3px; margin-bottom: 3px; }
+  .firma-label { font-size: 8px; font-weight: 700; color: #000; letter-spacing: 0.5px; }
 
   /* ── Page break + sections ────────────────────────────── */
   .page-break { page-break-before: always; padding-top: 8px; }
@@ -681,9 +696,18 @@ ${descripcionHtml}
 </table>
 
 <div class="firmas">
-  <div class="firma"><div style="margin-bottom:30px"></div>ELABORÓ</div>
-  <div class="firma"><div style="margin-bottom:30px"></div>REVISÓ</div>
-  <div class="firma"><div style="margin-bottom:30px"></div>AUTORIZÓ</div>
+  <div class="firma">
+    <div class="firma-name">${(obraActiva?.realiza ?? '').trim() || '&mdash;'}</div>
+    <div class="firma-label">ELABORÓ</div>
+  </div>
+  <div class="firma">
+    <div class="firma-name">${(obraActiva?.revisa ?? '').trim() || '&mdash;'}</div>
+    <div class="firma-label">REVISÓ</div>
+  </div>
+  <div class="firma">
+    <div class="firma-name">${(obraActiva?.autoriza ?? '').trim() || '&mdash;'}</div>
+    <div class="firma-label">AUTORIZÓ</div>
+  </div>
 </div>
 
 ${evidenciaPages}

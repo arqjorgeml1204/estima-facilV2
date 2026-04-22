@@ -6,17 +6,20 @@
 
 import {
   View, Text, TouchableOpacity, Modal, ActivityIndicator,
-  ScrollView, Platform,
+  ScrollView, Platform, Alert,
 } from 'react-native';
 import { useState, useRef, useEffect } from 'react';
+import { router } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
 import { PdfDeterministicExtractor, ContratoExtraido } from '../services/pdfExtractor';
 import { seedFromContract, getEmpresa, upsertEmpresa } from '../db/database';
 import { getCurrentUserId } from '../utils/auth';
+import { getObras, getObraActiva, getObraColorById, Obra } from '../utils/obras';
 import PdfWebViewBridge, { PdfBridgeRef } from '../services/pdfExtractor/PdfWebViewBridge';
 
 // ── Pasos del flujo ────────────────────────────────────────────────────────────
-type Step = 'idle' | 'picking' | 'extracting' | 'preview' | 'saving' | 'done' | 'error';
+// select-obra: paso intermedio entre preview y saving cuando hay >1 obra.
+type Step = 'idle' | 'picking' | 'extracting' | 'preview' | 'select-obra' | 'saving' | 'done' | 'error';
 
 interface Props {
   visible: boolean;
@@ -29,6 +32,8 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
   const [contrato, setContrato]   = useState<ContratoExtraido | null>(null);
   const [fileName, setFileName]   = useState('');
   const [errorMsg, setErrorMsg]   = useState('');
+  const [obras, setObras]         = useState<Obra[]>([]);
+  const [selectedObraId, setSelectedObraId] = useState<string | null>(null);
   const bridgeRef                 = useRef<PdfBridgeRef>(null);
 
   // Reset state when modal reopens (fixes #7: stuck on "contrato cargado")
@@ -38,6 +43,7 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
       setContrato(null);
       setErrorMsg('');
       setFileName('');
+      setSelectedObraId(null);
     }
   }, [visible]);
 
@@ -77,8 +83,46 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
     }
   };
 
-  // ── 3. Confirmar y guardar ─────────────────────────────────────────────────
+  // ── 3. Confirmar preview -> elegir obra (o auto) ───────────────────────────
   const handleConfirm = async () => {
+    if (!contrato) return;
+    try {
+      const lista = await getObras();
+      // 0 obras: forzar crear una en Ajustes antes de continuar.
+      if (lista.length === 0) {
+        Alert.alert(
+          'Sin obras configuradas',
+          'Debes crear al menos una obra antes de cargar un contrato. Te llevamos a Ajustes.',
+          [
+            {
+              text: 'Ir a Ajustes',
+              onPress: () => {
+                if (onSkip) onSkip();
+                router.push('/(tabs)/ajustes' as any);
+              },
+            },
+          ],
+        );
+        return;
+      }
+      // 1 obra: auto-seleccionar y guardar directo.
+      if (lista.length === 1) {
+        await persistirProyecto(lista[0].id);
+        return;
+      }
+      // >1 obras: mostrar selector con la activa pre-seleccionada.
+      const activa = await getObraActiva();
+      setObras(lista);
+      setSelectedObraId(activa ? activa.id : lista[0].id);
+      setStep('select-obra');
+    } catch (e: any) {
+      setErrorMsg(`Error al cargar obras: ${e.message}`);
+      setStep('error');
+    }
+  };
+
+  // ── 4. Guardar proyecto (usado tanto por auto-single-obra como por picker) ─
+  const persistirProyecto = async (obraId: string) => {
     if (!contrato) return;
     setStep('saving');
     try {
@@ -89,7 +133,13 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
         empresa = await getEmpresa(userId);
       }
       const empresaId = empresa!.id;
-      const proyectoId = await seedFromContract(contrato, empresaId, userId);
+      const proyectoId = await seedFromContract(
+        contrato,
+        empresaId,
+        userId,
+        undefined,
+        obraId,
+      );
       setStep('done');
       setTimeout(() => onComplete(proyectoId), 800);
     } catch (e: any) {
@@ -98,10 +148,16 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
     }
   };
 
+  const handleConfirmObraPicker = async () => {
+    if (!selectedObraId) return;
+    await persistirProyecto(selectedObraId);
+  };
+
   const handleRetry = () => {
     setStep('idle');
     setContrato(null);
     setErrorMsg('');
+    setSelectedObraId(null);
   };
 
   // ── UI ─────────────────────────────────────────────────────────────────────
@@ -136,6 +192,7 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
               {step === 'idle' && 'Carga tu contrato PDF para comenzar'}
               {step === 'extracting' && `Analizando: ${fileName}`}
               {step === 'preview' && 'Verifica la información extraída'}
+              {step === 'select-obra' && 'Selecciona la obra destino'}
               {step === 'saving' && 'Guardando en tu dispositivo...'}
               {step === 'done' && 'Datos guardados correctamente'}
               {step === 'error' && 'Ocurrió un problema'}
@@ -218,6 +275,65 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
               </View>
             )}
 
+            {/* SELECT-OBRA: picker de obra destino */}
+            {step === 'select-obra' && (
+              <View style={{ gap: 12 }}>
+                <Text style={{
+                  fontSize: 11, fontWeight: '700', color: '#003d9b',
+                  textTransform: 'uppercase', letterSpacing: 1, fontFamily: 'Inter',
+                }}>
+                  ¿A qué obra pertenece este contrato?
+                </Text>
+                <Text style={{ fontSize: 12, color: '#737685', fontFamily: 'Inter', lineHeight: 18 }}>
+                  El proyecto quedará etiquetado con la obra seleccionada. Podrás ver el badge de color en la lista de proyectos.
+                </Text>
+                <View style={{ gap: 8, marginTop: 4 }}>
+                  {obras.map((o) => {
+                    const selected = selectedObraId === o.id;
+                    const badgeColor = getObraColorById(o.id);
+                    return (
+                      <TouchableOpacity
+                        key={o.id}
+                        onPress={() => setSelectedObraId(o.id)}
+                        activeOpacity={0.8}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 10,
+                          borderWidth: 2,
+                          borderColor: selected ? '#003d9b' : '#e1e2e4',
+                          backgroundColor: selected ? '#eaf1ff' : '#ffffff',
+                          borderRadius: 10,
+                          paddingVertical: 12,
+                          paddingHorizontal: 14,
+                        }}
+                      >
+                        <View style={{
+                          width: 14, height: 14, borderRadius: 7,
+                          backgroundColor: badgeColor,
+                        }} />
+                        <Text
+                          numberOfLines={1}
+                          style={{
+                            flex: 1,
+                            fontSize: 13,
+                            fontWeight: selected ? '800' : '600',
+                            color: '#191c1e',
+                            fontFamily: 'Inter',
+                          }}
+                        >
+                          {o.nombre}
+                        </Text>
+                        {selected && (
+                          <Text style={{ fontSize: 16, color: '#003d9b' }}>✓</Text>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
+
             {/* DONE */}
             {step === 'done' && (
               <View style={{ alignItems: 'center', paddingVertical: 24, gap: 12 }}>
@@ -288,7 +404,7 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
                   activeOpacity={0.85}
                 >
                   <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700', fontFamily: 'Inter' }}>
-                    Confirmar y guardar
+                    Continuar
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -297,6 +413,33 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
                 >
                   <Text style={{ fontSize: 13, color: '#737685', fontFamily: 'Inter' }}>
                     Cargar otro PDF
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {step === 'select-obra' && (
+              <>
+                <TouchableOpacity
+                  onPress={handleConfirmObraPicker}
+                  disabled={!selectedObraId}
+                  style={{
+                    backgroundColor: selectedObraId ? '#003d9b' : '#c3c6d6',
+                    borderRadius: 12,
+                    paddingVertical: 14, alignItems: 'center',
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700', fontFamily: 'Inter' }}>
+                    Confirmar y guardar
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setStep('preview')}
+                  style={{ paddingVertical: 10, alignItems: 'center' }}
+                >
+                  <Text style={{ fontSize: 13, color: '#737685', fontFamily: 'Inter' }}>
+                    Volver
                   </Text>
                 </TouchableOpacity>
               </>

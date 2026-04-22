@@ -67,6 +67,12 @@ export async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
       try {
         await database.execAsync(`ALTER TABLE empresa ADD COLUMN user_id TEXT DEFAULT ''`);
       } catch (_) {}
+      // Multi-obra: etiqueta el proyecto con la obra a la que pertenece.
+      // Los proyectos pre-existentes quedan con obra_id NULL -> UI los
+      // muestra como "Sin obra" (badge gris). Idempotente via try/catch.
+      try {
+        await database.execAsync(`ALTER TABLE proyecto ADD COLUMN obra_id TEXT`);
+      } catch (_) {}
       // Tabla usuarios (auth local)
       try {
         await database.execAsync(`
@@ -135,7 +141,8 @@ export async function seedFromContract(
   data: ContratoExtraido,
   empresaId: number,
   userId: string = '',
-  desarrolladoraNombre: string = 'CASAS JAVER DE MEXICO S.A. DE C.V.'
+  desarrolladoraNombre: string = 'CASAS JAVER DE MEXICO S.A. DE C.V.',
+  obraId: string | null = null
 ): Promise<number> {
   const database = getDb();
 
@@ -166,26 +173,40 @@ export async function seedFromContract(
     : `FRENTE ${frenteNumero}`;
   const fondoGarantiaPct = data.fondoGarantia != null ? data.fondoGarantia : 5;
 
+  // Sanitización null-safe: los campos de ContratoExtraido son `string | null` /
+  // `number | null` (ver services/pdfExtractor/types.ts). Bindear null a columnas
+  // NOT NULL en SQLite produce java.lang.NullPointerException en prepareAsync.
+  // Normalizamos aquí con fallbacks seguros.
+  const conjuntoSafe = (data.conjunto && data.conjunto.trim()) || 'SIN-CODIGO';
+  const numeroContratoSafe = (data.numeroContrato && data.numeroContrato.trim()) || 'SIN-NUMERO';
+  const montoContratoSafe = typeof data.montoContrato === 'number' && !isNaN(data.montoContrato)
+    ? data.montoContrato
+    : 0;
+  const contratistaSafe = data.contratista ? ' — ' + data.contratista.substring(0, 50) : '';
+  const nombreSafe = `${conjuntoSafe}${contratistaSafe}`;
+  const descripcionObraSafe = data.descripcionObra ?? '';
+
   const proyectoResult = await database.runAsync(
     `INSERT INTO proyecto (
       codigo, numero_contrato, nombre, descripcion_contrato,
       empresa_id, desarrolladora_id,
       frente, frente_numero, frente_nombre, conjunto, monto_contrato,
       total_unidades, factor_por_seccion, prototipo,
-      fecha_inicio, fecha_terminacion, fondo_garantia, fondo_garantia_pct, user_id
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      fecha_inicio, fecha_terminacion, fondo_garantia, fondo_garantia_pct, user_id,
+      obra_id
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
-      data.conjunto,
-      data.numeroContrato,
-      `${data.conjunto}${data.contratista ? ' — ' + data.contratista.substring(0, 50) : ''}`,
-      data.descripcionObra ?? '',
+      conjuntoSafe,
+      numeroContratoSafe,
+      nombreSafe,
+      descripcionObraSafe,
       empresaId,
       desarrolladora.id,
       frenteLegacy,
       frenteNumero,
       frenteNombre,
-      data.conjunto,
-      data.montoContrato,
+      conjuntoSafe,
+      montoContratoSafe,
       totalUnidades,
       data.conceptos[0]?.factorTotal ?? 5,
       prototipo,
@@ -193,18 +214,29 @@ export async function seedFromContract(
       '',  // fechaTerminacion — not extracted
       fondoGarantiaPct,    // legacy column (mantenida por back-compat)
       fondoGarantiaPct,    // nueva columna explícita
-      userId,
+      userId ?? '',
+      obraId,              // etiqueta por obra (null = legacy "sin obra")
     ]
   );
   const proyectoId = proyectoResult.lastInsertRowId;
 
   // 4. Conceptos (batch insert)
+  // Null-safe: tabla concepto tiene unidad/costo_unitario/factor NOT NULL.
+  // Los campos del extractor son nullables (ver types.ts), así que normalizamos.
   for (let i = 0; i < data.conceptos.length; i++) {
     const c = data.conceptos[i];
     // Split "code - description" back into separate fields
-    const dashIdx = c.actividad.indexOf(' - ');
-    const actividadCode = dashIdx >= 0 ? c.actividad.slice(0, dashIdx) : c.actividad;
-    const descripcion = dashIdx >= 0 ? c.actividad.slice(dashIdx + 3) : '';
+    const actividadStr = c.actividad || '';
+    const dashIdx = actividadStr.indexOf(' - ');
+    const actividadCode = dashIdx >= 0 ? actividadStr.slice(0, dashIdx) : actividadStr;
+    const descripcion = dashIdx >= 0 ? actividadStr.slice(dashIdx + 3) : '';
+    const unidadSafe = (c.unidad && c.unidad.trim()) || 'PZA';
+    const costoUnitarioSafe = typeof c.costoUnitario === 'number' && !isNaN(c.costoUnitario)
+      ? c.costoUnitario
+      : 0;
+    const factorSafe = typeof c.factorTotal === 'number' && !isNaN(c.factorTotal)
+      ? c.factorTotal
+      : 0;
     await database.runAsync(
       `INSERT INTO concepto (
         proyecto_id, actividad, descripcion, unidad,
@@ -214,11 +246,11 @@ export async function seedFromContract(
         proyectoId,
         actividadCode,
         descripcion,
-        c.unidad,
-        c.costoUnitario,
-        c.factorTotal,
-        c.paquete,
-        c.subpaquete,
+        unidadSafe,
+        costoUnitarioSafe,
+        factorSafe,
+        c.paquete ?? '',
+        c.subpaquete ?? '',
         i,
       ]
     );
@@ -237,12 +269,14 @@ export async function getProyectos(userId?: string) {
       id: number; codigo: string; numero_contrato: string;
       nombre: string; monto_contrato: number;
       semana_actual: number; numero_estimacion_actual: number;
+      obra_id: string | null;
     }>('SELECT * FROM proyecto ORDER BY created_at DESC');
   }
   return database.getAllAsync<{
     id: number; codigo: string; numero_contrato: string;
     nombre: string; monto_contrato: number;
     semana_actual: number; numero_estimacion_actual: number;
+    obra_id: string | null;
   }>('SELECT * FROM proyecto WHERE user_id=? OR user_id=\'\' ORDER BY created_at DESC', [userId]);
 }
 

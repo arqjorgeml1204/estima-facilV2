@@ -8,11 +8,11 @@ import {
   ActivityIndicator, ScrollView, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useLocalSearchParams, router } from 'expo-router';
+import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
 import { useEffect, useState, useCallback } from 'react';
-import { useFocusEffect } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import {
+  initDatabase,
   getProyectoById,
   getEstimacionesByProyecto,
   crearEstimacion,
@@ -80,18 +80,39 @@ export default function ProyectoDashboard() {
   const [estimaciones, setEstimaciones] = useState<Estimacion[]>([]);
   const [estimadoTotal, setEstimadoTotal] = useState(0);
   const [loading, setLoading]         = useState(true);
+  const [loadError, setLoadError]     = useState<string | null>(null);
 
   const load = async () => {
+    // Valida id antes de disparar queries: Number(undefined) === NaN y las
+    // queries con NaN devuelven null silenciosamente o lanzan NPE en SQLite.
+    const numericId = Number(id);
+    if (!id || isNaN(numericId) || numericId <= 0) {
+      setLoading(false);
+      setLoadError('ID de proyecto inválido');
+      return;
+    }
     setLoading(true);
-    const p = await getProyectoById(Number(id));
-    const e = await getEstimacionesByProyecto(Number(id));
-    const total = await getTotalEstimadoPorProyecto(Number(id));
-    setProyecto(p as Proyecto);
-    setEstimaciones(e as Estimacion[]);
-    setEstimadoTotal(total);
-    setLoading(false);
+    setLoadError(null);
+    try {
+      // Garantiza que la DB esté inicializada si el user entra directo a esta ruta.
+      await initDatabase();
+      const p = await getProyectoById(numericId);
+      const e = await getEstimacionesByProyecto(numericId);
+      const total = await getTotalEstimadoPorProyecto(numericId);
+      setProyecto(p as Proyecto);
+      setEstimaciones((e as Estimacion[]) ?? []);
+      setEstimadoTotal(typeof total === 'number' ? total : 0);
+    } catch (err: any) {
+      // Captura cualquier rechazo de SQLite para evitar loading infinito.
+      setLoadError(err?.message ?? 'Error al cargar el proyecto');
+    } finally {
+      setLoading(false);
+    }
   };
 
+  // useFocusEffect ya se dispara al montar la pantalla, por lo que el useEffect
+  // extra sería redundante. Lo mantenemos porque al volver con mismo id no siempre
+  // re-dispara el focus si la navegación fue push/back muy rápida.
   useEffect(() => { load(); }, [id]);
   useFocusEffect(useCallback(() => { load(); }, [id]));
 

@@ -1,30 +1,61 @@
 /**
  * ajustes.tsx
- * Pantalla de configuracion rediseñada — Wave 3F/Cambio 4b
- * Secciones: MI EMPRESA / MI CUENTA / SUSCRIPCION
+ * Pantalla de configuracion rediseñada.
+ *
+ * Refactor: soporte de multiples obras (perfiles).
+ *   - Dropdown de obras + acciones (agregar, renombrar, eliminar).
+ *   - Cada obra persiste REALIZA / REVISA / AUTORIZA.
+ *   - La obra activa se usa en el PDF (ver app/pdf/soporte/[id].tsx).
+ *   - Campo FRENTE eliminado de la UI (queda deprecated en el modelo).
+ *
+ * Secciones: MI EMPRESA (obras) / MI CUENTA / SUSCRIPCION.
  */
 
 import {
   View, Text, TextInput, TouchableOpacity,
-  ScrollView, Alert, KeyboardAvoidingView, Platform,
+  ScrollView, Alert, KeyboardAvoidingView, Platform, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { getCurrentUserId } from '../../utils/auth';
+import {
+  Obra,
+  getObras,
+  getObraActiva,
+  setObraActiva,
+  upsertObra,
+  deleteObra,
+  createObra,
+  migrateLegacyObra,
+} from '../../utils/obras';
 
 export default function AjustesScreen() {
   const router = useRouter();
 
-  // useRef pattern — evita re-render que destruye el teclado
-  const obraRef   = useRef<string>('VISTAS DEL NEVADO');
-  const frenteRef = useRef<string>('FRENTE 01');
+  // ── Obras state ─────────────────────────────────────────────────────────────
+  const [obras, setObras] = useState<Obra[]>([]);
+  const [activaId, setActivaId] = useState<string>('');
+  // Campos editables de la obra activa (useRef patron: evita re-render que
+  // destruye el teclado mientras el usuario escribe).
+  const nombreRef = useRef<string>('');
+  const realizaRef = useRef<string>('');
+  const revisaRef = useRef<string>('');
+  const autorizaRef = useRef<string>('');
+  // Valores iniciales para los defaultValue (cambian al conmutar obra activa).
+  const [initialNombre, setInitialNombre] = useState('');
+  const [initialRealiza, setInitialRealiza] = useState('');
+  const [initialRevisa, setInitialRevisa] = useState('');
+  const [initialAutoriza, setInitialAutoriza] = useState('');
 
-  const [initialObra,   setInitialObra]   = useState('VISTAS DEL NEVADO');
-  const [initialFrente, setInitialFrente] = useState('FRENTE 01');
+  // ── UI state: selector y modales ────────────────────────────────────────────
+  const [obraMenuOpen, setObraMenuOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<'create' | 'rename' | null>(null);
+  const [modalInput, setModalInput] = useState('');
 
+  // ── Cuenta ──────────────────────────────────────────────────────────────────
   const [userAccount, setUserAccount] = useState('');
   const [editingPassword, setEditingPassword] = useState(false);
   const [showCurrentPass, setShowCurrentPass] = useState(false);
@@ -34,30 +65,151 @@ export default function AjustesScreen() {
   const [newPassword,     setNewPassword]     = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
+  // ── Carga + migracion legacy en primer mount ────────────────────────────────
+  const loadObras = useCallback(async () => {
+    await migrateLegacyObra(); // idempotente
+    const list = await getObras();
+    const activa = await getObraActiva();
+    setObras(list);
+    if (activa) {
+      setActivaId(activa.id);
+      nombreRef.current = activa.nombre;
+      realizaRef.current = activa.realiza ?? '';
+      revisaRef.current = activa.revisa ?? '';
+      autorizaRef.current = activa.autoriza ?? '';
+      setInitialNombre(activa.nombre);
+      setInitialRealiza(activa.realiza ?? '');
+      setInitialRevisa(activa.revisa ?? '');
+      setInitialAutoriza(activa.autoriza ?? '');
+    }
+  }, []);
+
   useEffect(() => {
     (async () => {
-      const obra   = await AsyncStorage.getItem('obra');
-      const frente = await AsyncStorage.getItem('frente');
-      if (obra)   { setInitialObra(obra);     obraRef.current   = obra; }
-      if (frente) { setInitialFrente(frente); frenteRef.current = frente; }
+      await loadObras();
       const userId = await getCurrentUserId();
       setUserAccount(userId === 'default' ? 'Sin cuenta' : userId);
     })();
-  }, []);
+  }, [loadObras]);
 
+  // ── Conmutar obra activa ────────────────────────────────────────────────────
+  const handleSelectObra = useCallback(async (id: string) => {
+    if (!id || id === activaId) {
+      setObraMenuOpen(false);
+      return;
+    }
+    // Antes de cambiar, persiste cambios pendientes de la obra actual
+    if (activaId) {
+      const current = obras.find(o => o.id === activaId);
+      if (current) {
+        await upsertObra({
+          ...current,
+          nombre: nombreRef.current || current.nombre,
+          realiza: realizaRef.current,
+          revisa: revisaRef.current,
+          autoriza: autorizaRef.current,
+        });
+      }
+    }
+    await setObraActiva(id);
+    setObraMenuOpen(false);
+    await loadObras();
+  }, [activaId, obras, loadObras]);
+
+  // ── Crear / renombrar obra ──────────────────────────────────────────────────
+  const openCreateModal = () => {
+    setModalInput('');
+    setModalMode('create');
+  };
+  const openRenameModal = () => {
+    setModalInput(nombreRef.current || initialNombre);
+    setModalMode('rename');
+  };
+  const closeModal = () => {
+    setModalMode(null);
+    setModalInput('');
+  };
+
+  const handleModalConfirm = useCallback(async () => {
+    const name = modalInput.trim();
+    if (!name) {
+      Alert.alert('Nombre requerido', 'Escribe un nombre para la obra.');
+      return;
+    }
+    if (modalMode === 'create') {
+      const created = await createObra(name);
+      await setObraActiva(created.id);
+      closeModal();
+      await loadObras();
+    } else if (modalMode === 'rename') {
+      const current = obras.find(o => o.id === activaId);
+      if (current) {
+        await upsertObra({
+          ...current,
+          nombre: name,
+          realiza: realizaRef.current,
+          revisa: revisaRef.current,
+          autoriza: autorizaRef.current,
+        });
+      }
+      closeModal();
+      await loadObras();
+    }
+  }, [modalMode, modalInput, obras, activaId, loadObras]);
+
+  // ── Eliminar obra ───────────────────────────────────────────────────────────
+  const handleDelete = useCallback(() => {
+    if (obras.length <= 1) {
+      Alert.alert('No disponible', 'Debe existir al menos una obra. Crea otra antes de eliminar esta.');
+      return;
+    }
+    const current = obras.find(o => o.id === activaId);
+    if (!current) return;
+    Alert.alert(
+      'Eliminar obra',
+      `¿Seguro que deseas eliminar "${current.nombre}"? Esta accion no se puede deshacer.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteObra(current.id);
+              await loadObras();
+            } catch (e: any) {
+              Alert.alert('Error', e?.message ?? 'No se pudo eliminar la obra.');
+            }
+          },
+        },
+      ],
+    );
+  }, [obras, activaId, loadObras]);
+
+  // ── Guardar cambios (obra activa + password) ────────────────────────────────
   const handleSave = async () => {
     if (editingPassword && newPassword !== confirmPassword) {
       Alert.alert('Error', 'La nueva contrasena y la confirmacion no coinciden.');
       return;
     }
-    await AsyncStorage.setItem('obra',   obraRef.current   || 'VISTAS DEL NEVADO');
-    await AsyncStorage.setItem('frente', frenteRef.current || 'FRENTE 01');
+    const current = obras.find(o => o.id === activaId);
+    if (current) {
+      await upsertObra({
+        ...current,
+        nombre: (nombreRef.current || current.nombre).trim(),
+        realiza: realizaRef.current.trim(),
+        revisa: revisaRef.current.trim(),
+        autoriza: autorizaRef.current.trim(),
+      });
+    }
     if (editingPassword) {
       // TODO: AuthService.updatePassword(currentPassword, newPassword)
     }
+    await loadObras();
     Alert.alert('Guardado', 'Cambios guardados correctamente');
   };
 
+  // ── Subcomponentes de UI ────────────────────────────────────────────────────
   const RefField = ({
     label, defaultValue, onChangeText, placeholder,
   }: {
@@ -72,7 +224,7 @@ export default function AjustesScreen() {
         {label}
       </Text>
       <TextInput
-        key={label}
+        key={label + '_' + activaId}
         defaultValue={defaultValue}
         onChangeText={onChangeText}
         placeholder={placeholder}
@@ -147,6 +299,8 @@ export default function AjustesScreen() {
     </View>
   );
 
+  const activaObra = obras.find(o => o.id === activaId) ?? null;
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
       <KeyboardAvoidingView
@@ -162,22 +316,145 @@ export default function AjustesScreen() {
         </Text>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 20 }}>
+      <ScrollView contentContainerStyle={{ padding: 20 }} keyboardShouldPersistTaps="handled">
 
         {/* MI EMPRESA */}
         <SectionTitle label="Mi Empresa" />
         <Card>
+          {/* Selector de obra + acciones */}
+          <Text style={{
+            fontSize: 11, fontWeight: '700', color: '#434654',
+            textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6,
+          }}>
+            OBRA
+          </Text>
+
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+            <TouchableOpacity
+              onPress={() => setObraMenuOpen(v => !v)}
+              activeOpacity={0.7}
+              style={{
+                flex: 1,
+                backgroundColor: '#e7e8ea', borderRadius: 8,
+                paddingHorizontal: 14, paddingVertical: 12,
+                flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                borderBottomWidth: 2, borderBottomColor: '#003d9b',
+              }}
+            >
+              <Text style={{ fontSize: 14, color: '#191c1e', fontWeight: '600', flex: 1 }} numberOfLines={1}>
+                {activaObra?.nombre ?? 'Selecciona una obra'}
+              </Text>
+              <MaterialIcons
+                name={obraMenuOpen ? 'expand-less' : 'expand-more'}
+                size={20} color="#737685"
+              />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={openCreateModal}
+              activeOpacity={0.7}
+              style={{
+                backgroundColor: '#003d9b', borderRadius: 8,
+                paddingHorizontal: 10, paddingVertical: 12,
+                alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              <MaterialIcons name="add" size={20} color="#ffffff" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={openRenameModal}
+              activeOpacity={0.7}
+              disabled={!activaObra}
+              style={{
+                backgroundColor: activaObra ? '#f0f1f3' : '#f8f9fb', borderRadius: 8,
+                paddingHorizontal: 10, paddingVertical: 12,
+                alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              <MaterialIcons name="edit" size={18} color={activaObra ? '#003d9b' : '#c3c6d6'} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={handleDelete}
+              activeOpacity={0.7}
+              disabled={!activaObra || obras.length <= 1}
+              style={{
+                backgroundColor: obras.length > 1 ? '#fdecec' : '#f8f9fb', borderRadius: 8,
+                paddingHorizontal: 10, paddingVertical: 12,
+                alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              <MaterialIcons
+                name="delete-outline" size={18}
+                color={obras.length > 1 ? '#ba1a1a' : '#c3c6d6'}
+              />
+            </TouchableOpacity>
+          </View>
+
+          {/* Dropdown de obras (inline, no modal) */}
+          {obraMenuOpen && (
+            <View style={{
+              backgroundColor: '#f8f9fb', borderRadius: 8,
+              borderWidth: 1, borderColor: '#e1e2e4',
+              marginBottom: 12, overflow: 'hidden',
+            }}>
+              {obras.length === 0 ? (
+                <View style={{ padding: 12 }}>
+                  <Text style={{ fontSize: 12, color: '#737685' }}>No hay obras. Agrega una con el boton +.</Text>
+                </View>
+              ) : (
+                obras.map((o, idx) => (
+                  <TouchableOpacity
+                    key={o.id}
+                    onPress={() => handleSelectObra(o.id)}
+                    activeOpacity={0.7}
+                    style={{
+                      paddingHorizontal: 14, paddingVertical: 10,
+                      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                      borderBottomWidth: idx === obras.length - 1 ? 0 : 1,
+                      borderBottomColor: '#e1e2e4',
+                      backgroundColor: o.id === activaId ? '#e8f0fe' : 'transparent',
+                    }}
+                  >
+                    <Text style={{ fontSize: 13, color: '#191c1e', fontWeight: '600', flex: 1 }} numberOfLines={1}>
+                      {o.nombre}
+                    </Text>
+                    {o.id === activaId && (
+                      <MaterialIcons name="check" size={18} color="#003d9b" />
+                    )}
+                  </TouchableOpacity>
+                ))
+              )}
+            </View>
+          )}
+
+          {/* Campos de responsables (por obra) */}
+          <View style={{ height: 1, backgroundColor: '#e1e2e4', marginBottom: 14 }} />
+          <Text style={{
+            fontSize: 10, fontWeight: '700', color: '#737685',
+            textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10,
+          }}>
+            Responsables (opcional — se usan en el PDF)
+          </Text>
+
           <RefField
-            label="OBRA"
-            defaultValue={initialObra}
-            onChangeText={(v: string) => { obraRef.current = v; }}
-            placeholder="VISTAS DEL NEVADO"
+            label="REALIZA"
+            defaultValue={initialRealiza}
+            onChangeText={(v: string) => { realizaRef.current = v; }}
+            placeholder="Nombre de quien realiza"
           />
           <RefField
-            label="FRENTE"
-            defaultValue={initialFrente}
-            onChangeText={(v: string) => { frenteRef.current = v; }}
-            placeholder="FRENTE 01"
+            label="REVISA"
+            defaultValue={initialRevisa}
+            onChangeText={(v: string) => { revisaRef.current = v; }}
+            placeholder="Nombre de quien revisa"
+          />
+          <RefField
+            label="AUTORIZA"
+            defaultValue={initialAutoriza}
+            onChangeText={(v: string) => { autorizaRef.current = v; }}
+            placeholder="Nombre de quien autoriza"
           />
         </Card>
 
@@ -321,6 +598,63 @@ export default function AjustesScreen() {
         <View style={{ height: 40 }} />
       </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Modal: crear / renombrar obra */}
+      <Modal
+        transparent
+        animationType="fade"
+        visible={modalMode !== null}
+        onRequestClose={closeModal}
+      >
+        <View style={{
+          flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
+          justifyContent: 'center', paddingHorizontal: 24,
+        }}>
+          <View style={{
+            backgroundColor: '#ffffff', borderRadius: 14, padding: 20,
+          }}>
+            <Text style={{ fontSize: 16, fontWeight: '800', color: '#191c1e', marginBottom: 14 }}>
+              {modalMode === 'create' ? 'Nueva obra' : 'Renombrar obra'}
+            </Text>
+            <TextInput
+              value={modalInput}
+              onChangeText={setModalInput}
+              placeholder="Nombre de la obra"
+              placeholderTextColor="#c3c6d6"
+              autoFocus
+              autoCapitalize="characters"
+              style={{
+                backgroundColor: '#e7e8ea', borderRadius: 8,
+                paddingHorizontal: 14, paddingVertical: 12,
+                fontSize: 14, color: '#191c1e',
+                borderBottomWidth: 2, borderBottomColor: '#003d9b',
+                marginBottom: 18,
+              }}
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
+              <TouchableOpacity
+                onPress={closeModal}
+                style={{ paddingHorizontal: 14, paddingVertical: 10 }}
+                activeOpacity={0.7}
+              >
+                <Text style={{ fontSize: 14, color: '#737685', fontWeight: '600' }}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleModalConfirm}
+                activeOpacity={0.85}
+                style={{
+                  backgroundColor: '#003d9b', borderRadius: 8,
+                  paddingHorizontal: 16, paddingVertical: 10,
+                }}
+              >
+                <Text style={{ fontSize: 14, color: '#ffffff', fontWeight: '700' }}>
+                  {modalMode === 'create' ? 'Crear' : 'Guardar'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
