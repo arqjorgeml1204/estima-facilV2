@@ -207,10 +207,40 @@ export default function ProyectoDashboard() {
   }
 
   if (!proyecto) {
+    // Fallback con header + boton Regresar para que el usuario nunca quede atrapado
+    // si el proyecto no existe o falla la carga (mismo patron que PDF soporte).
     return (
-      <View style={{ flex: 1, backgroundColor: '#f8f9fb', justifyContent: 'center', alignItems: 'center' }}>
-        <Text style={{ color: '#737685' }}>Proyecto no encontrado</Text>
-      </View>
+      <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12 }}>
+          <TouchableOpacity onPress={() => router.back()} style={{ marginRight: 12 }} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <MaterialIcons name="arrow-back" size={22} color="#191c1e" />
+          </TouchableOpacity>
+          <Text style={{ fontSize: 15, fontWeight: '800', color: '#191c1e' }}>Proyecto</Text>
+        </View>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
+          <MaterialIcons name="error-outline" size={48} color="#c3c6d6" />
+          <Text style={{ color: '#434654', fontSize: 15, fontWeight: '700', marginTop: 12, textAlign: 'center' }}>
+            Proyecto no encontrado
+          </Text>
+          <Text style={{ color: '#737685', fontSize: 12, marginTop: 6, textAlign: 'center' }}>
+            {loadError ? `Razon: ${loadError}` : 'El proyecto pudo haber sido eliminado o el id es invalido.'}
+          </Text>
+          <TouchableOpacity
+            onPress={() => router.replace('/' as any)}
+            style={{ marginTop: 20, backgroundColor: '#003d9b', borderRadius: 8, paddingHorizontal: 20, paddingVertical: 10 }}
+            activeOpacity={0.85}
+          >
+            <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 13 }}>Volver a Proyectos</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => load()}
+            style={{ marginTop: 10, paddingHorizontal: 20, paddingVertical: 8 }}
+            activeOpacity={0.85}
+          >
+            <Text style={{ color: '#003d9b', fontWeight: '700', fontSize: 13 }}>Reintentar</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
     );
   }
 
