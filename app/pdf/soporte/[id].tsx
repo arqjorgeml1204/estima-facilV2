@@ -155,34 +155,66 @@ export default function PdfSoporte() {
 
   useEffect(() => {
     (async () => {
+      // Valida id antes de cualquier query. Number(undefined) === NaN y SQLite
+      // puede lanzar NullPointerException al bindear NaN en release Hermes.
+      const numericId = Number(id);
+      if (!id || isNaN(numericId) || numericId <= 0) {
+        console.warn('[PdfSoporte] id invalido:', id, '->', numericId);
+        setLoading(false);
+        return;
+      }
+
       try {
         await initDatabase();
-        // Migracion legacy a modelo multi-obra (idempotente).
+      } catch (e: any) {
+        console.error('[PdfSoporte] initDatabase error:', e?.message ?? e);
+        setLoading(false);
+        return;
+      }
+
+      // Obra activa (nueva estructura). Si falla, usamos fallback legacy.
+      // AISLADO del flujo principal: nunca romper el PDF por un error de obra.
+      try {
         await migrateLegacyObra();
         const activa = await getObraActiva();
         setObraActiva(activa);
-        // Preferir obra activa (nuevo modelo). Fallback: legacy 'obra'.
         if (activa?.nombre) {
           setObraAsync(activa.nombre);
         } else {
           const obraVal = await AsyncStorage.getItem('obra');
           if (obraVal) setObraAsync(obraVal);
         }
-        // Frente legacy (deprecated pero aun visible en el header del PDF).
+      } catch (e: any) {
+        console.warn('[PdfSoporte] obra helpers fallaron (usando fallback):', e?.message ?? e);
+        try {
+          const obraVal = await AsyncStorage.getItem('obra');
+          if (obraVal) setObraAsync(obraVal);
+        } catch (_) {}
+      }
+
+      // Frente legacy (deprecated pero aun visible en el header del PDF).
+      try {
         const frenteVal = await AsyncStorage.getItem('frente');
         if (frenteVal) setFrenteAsync(frenteVal);
-        const est = await getEstimacionById(Number(id));
-        if (!est) { setLoading(false); return; }
+      } catch (_) {}
+
+      try {
+        const est = await getEstimacionById(numericId);
+        if (!est) {
+          console.warn('[PdfSoporte] getEstimacionById retorno null para id:', numericId);
+          setLoading(false);
+          return;
+        }
         const [proy, emp, rows, evs, cros] = await Promise.all([
           getProyectoById(est.proyecto_id),
           getEmpresa(),
-          getDetallesByEstimacion(Number(id)),
-          getEvidenciasByEstimacion(Number(id)),
-          getCroquisByEstimacion(Number(id)),
+          getDetallesByEstimacion(numericId),
+          getEvidenciasByEstimacion(numericId),
+          getCroquisByEstimacion(numericId),
         ]);
         const conceptosData = proy ? await getConceptosByProyecto(proy.id) : [];
         const acumPrevio = proy
-          ? await getEstimadoAcumuladoPrevio(proy.id, Number(id))
+          ? await getEstimadoAcumuladoPrevio(proy.id, numericId)
           : 0;
         setEstimacion(est);
         setProyecto(proy);
@@ -192,8 +224,8 @@ export default function PdfSoporte() {
         setEvidencias(evs as any[]);
         setCroquisList(cros as any[]);
         setEstimadoAcumuladoProyecto(acumPrevio);
-      } catch (e) {
-        console.error('[PdfSoporte] load error:', e);
+      } catch (e: any) {
+        console.error('[PdfSoporte] load principal error:', e?.message ?? e);
       } finally {
         setLoading(false);
       }
@@ -806,9 +838,33 @@ ${croquesPages}
 
   if (!estimacion || !proyecto) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#f8f9fb', justifyContent: 'center', alignItems: 'center' }}>
-        <Text style={{ color: '#737685' }}>Estimación no encontrada</Text>
-      </View>
+      <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#f8f9fb' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12 }}>
+          <TouchableOpacity onPress={() => router.back()} style={{ marginRight: 12 }}>
+            <MaterialIcons name="arrow-back" size={22} color="#191c1e" />
+          </TouchableOpacity>
+          <Text style={{ fontSize: 15, fontWeight: '800', color: '#191c1e' }}>Soporte de Estimación</Text>
+        </View>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 }}>
+          <MaterialIcons name="error-outline" size={48} color="#c3c6d6" />
+          <Text style={{ color: '#434654', fontSize: 15, fontWeight: '700', marginTop: 12, textAlign: 'center' }}>
+            No se pudo cargar la estimación
+          </Text>
+          <Text style={{ color: '#737685', fontSize: 12, marginTop: 6, textAlign: 'center' }}>
+            Regresa al grid e intenta de nuevo. Si el problema persiste, reinicia la app.
+          </Text>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={{
+              marginTop: 20, backgroundColor: '#003d9b', borderRadius: 8,
+              paddingHorizontal: 20, paddingVertical: 10,
+            }}
+            activeOpacity={0.85}
+          >
+            <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 13 }}>Regresar</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
     );
   }
 

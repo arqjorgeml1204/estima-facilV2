@@ -17,7 +17,7 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useLocalSearchParams, router } from 'expo-router';
+import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -588,12 +588,29 @@ export default function EstimacionGrid() {
   const [soloDisponibles, setSoloDisponibles] = useState(false);
 
   // ── Carga inicial ────────────────────────────────────────────────────────────
+  // Guard anti-reentrante: evita loads concurrentes si focus + mount disparan
+  // el hook al mismo tiempo (expo-sqlite puede rechazar prepareAsync bajo
+  // concurrencia en Hermes release).
+  const loadingRef = useRef(false);
+
   const load = useCallback(async () => {
+    // Valida estId antes de disparar queries. Number(undefined) === NaN y
+    // bindear NaN en SQLite puede lanzar NullPointerException en Hermes.
+    if (!id || isNaN(estId) || estId <= 0) {
+      console.warn('[EstimacionGrid] estId invalido:', id, '->', estId);
+      setLoading(false);
+      Alert.alert('Error', 'ID de estimacion invalido. Regresa e intenta de nuevo.');
+      router.back();
+      return;
+    }
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     setLoading(true);
     try {
       await initDatabase();
       const est = await getEstimacionById(estId);
       if (!est) {
+        console.warn('[EstimacionGrid] getEstimacionById retorno null para id:', estId);
         Alert.alert('Error', 'No se encontro la estimacion. Regresa e intenta de nuevo.');
         router.back();
         return;
@@ -601,6 +618,7 @@ export default function EstimacionGrid() {
 
       const proy = await getProyectoById(est.proyecto_id);
       if (!proy) {
+        console.warn('[EstimacionGrid] getProyectoById retorno null para id:', est.proyecto_id);
         Alert.alert('Error', 'No se encontro el proyecto asociado.');
         router.back();
         return;
@@ -629,15 +647,34 @@ export default function EstimacionGrid() {
         retencion: est.retencion || 0,
         totalAPagar: est.total_a_pagar || 0,
       });
-    } catch (e) {
-      Alert.alert('Error al cargar', 'Ocurrio un error inesperado. Regresa e intenta de nuevo.');
+    } catch (e: any) {
+      console.error('[EstimacionGrid] load error para estId:', estId, e?.message ?? e);
+      Alert.alert(
+        'Error al cargar',
+        `No se pudo cargar la estimacion (${e?.message ?? 'error desconocido'}). Regresa e intenta de nuevo.`
+      );
       router.back();
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
-  }, [estId]);
+  }, [estId, id]);
 
-  useEffect(() => { load(); }, []);
+  // useEffect con dep [estId] asegura que si los params cambian sin unmount,
+  // el load se re-dispare con el id correcto (fix race-condition del dep []).
+  useEffect(() => { load(); }, [estId]);
+
+  // Al volver desde PDF / evidencia / croquis, re-sincronizar desde DB para
+  // reflejar cambios externos (evita ver data stale o crashes por state inconsistente).
+  useFocusEffect(
+    useCallback(() => {
+      // Solo recargar si ya hubo un mount inicial exitoso (estimacion seteado).
+      // Evita doble-load en el mount (ya lo hace useEffect).
+      if (estimacion && !loadingRef.current) {
+        load();
+      }
+    }, [estimacion, load])
+  );
 
   // ── Est. #X editable ───────────────────────────────────────────────────────
   const handleEstimNumberBlur = async () => {
@@ -872,51 +909,59 @@ export default function EstimacionGrid() {
     setSaving(true);
     setSummaryVisible(false);
 
-    for (const c of conceptos) {
-      const priorLocked = priorData[c.id]?.cantidad ?? 0;
-      const det = detalles[c.id];
-      const cantEsta = det?.cantidad_esta_est ?? 0;
-
-      // antOverrides[c.id] = full ANT (priorLocked + modeAct) from summary
-      const fullAnt = antOverrides[c.id];
-      if (fullAnt === undefined && cantEsta === 0) continue;
-
-      let modeActAdditions = fullAnt !== undefined
-        ? Math.max(0, fullAnt - priorLocked)
-        : (det?.cantidad_anterior ?? 0);
-
-      // Clamp: can't exceed factor
-      modeActAdditions = Math.min(modeActAdditions, Math.max(0, c.factor - priorLocked - cantEsta));
-
-      if (cantEsta > 0 || modeActAdditions > 0) {
-        await upsertDetalle(estId, c.id, modeActAdditions, cantEsta, c.costo_unitario);
-        const cellState: CellState = cantEsta > 0 ? 'current' : 'estimated_prior';
-        await updateCellStates(estId, c.id, cellState, c.costo_unitario);
-      }
-    }
-
-    const t = await recalcularTotalesEstimacion(estId);
-    setTotales(t);
-
-    // Reload detalles
-    const dets = await getDetallesByEstimacion(estId);
-    const detMap: DetalleMap = {};
-    for (const d of dets) {
-      detMap[d.concepto_id] = { ...d, cell_state: (d.cell_state as CellState) ?? 'empty' };
-    }
-    setDetalles(detMap);
-
-    setSaving(false);
-
-    // Backup a Supabase (fire-and-forget, debounced, silencioso).
-    // Se dispara tras guardar exitoso para que la data persista aun si el
-    // usuario desinstala la app.
     try {
-      const uid = await AsyncStorage.getItem('@estimafacil:user_id');
-      if (uid && uid.indexOf('@') >= 0) requestCloudBackup(uid);
-    } catch (_) {}
+      for (const c of conceptos) {
+        const priorLocked = priorData[c.id]?.cantidad ?? 0;
+        const det = detalles[c.id];
+        const cantEsta = det?.cantidad_esta_est ?? 0;
 
-    Alert.alert('Guardado', 'La estimación fue guardada correctamente.');
+        // antOverrides[c.id] = full ANT (priorLocked + modeAct) from summary
+        const fullAnt = antOverrides[c.id];
+        if (fullAnt === undefined && cantEsta === 0) continue;
+
+        let modeActAdditions = fullAnt !== undefined
+          ? Math.max(0, fullAnt - priorLocked)
+          : (det?.cantidad_anterior ?? 0);
+
+        // Clamp: can't exceed factor
+        modeActAdditions = Math.min(modeActAdditions, Math.max(0, c.factor - priorLocked - cantEsta));
+
+        if (cantEsta > 0 || modeActAdditions > 0) {
+          await upsertDetalle(estId, c.id, modeActAdditions, cantEsta, c.costo_unitario);
+          const cellState: CellState = cantEsta > 0 ? 'current' : 'estimated_prior';
+          await updateCellStates(estId, c.id, cellState, c.costo_unitario);
+        }
+      }
+
+      const t = await recalcularTotalesEstimacion(estId);
+      setTotales(t);
+
+      // Reload detalles
+      const dets = await getDetallesByEstimacion(estId);
+      const detMap: DetalleMap = {};
+      for (const d of dets) {
+        detMap[d.concepto_id] = { ...d, cell_state: (d.cell_state as CellState) ?? 'empty' };
+      }
+      setDetalles(detMap);
+
+      // Backup a Supabase (fire-and-forget, debounced, silencioso).
+      // Se dispara tras guardar exitoso para que la data persista aun si el
+      // usuario desinstala la app.
+      try {
+        const uid = await AsyncStorage.getItem('@estimafacil:user_id');
+        if (uid && uid.indexOf('@') >= 0) requestCloudBackup(uid);
+      } catch (_) {}
+
+      Alert.alert('Guardado', 'La estimación fue guardada correctamente.');
+    } catch (e: any) {
+      console.error('[EstimacionGrid] handleSummaryConfirm error:', e?.message ?? e);
+      Alert.alert(
+        'Error al guardar',
+        `No se pudo guardar la estimacion (${e?.message ?? 'error desconocido'}). Intenta de nuevo.`
+      );
+    } finally {
+      setSaving(false);
+    }
   }, [conceptos, priorData, detalles, estId]);
 
   // ── Scroll horizontal sincronizado del grid ─────────────────────────────────

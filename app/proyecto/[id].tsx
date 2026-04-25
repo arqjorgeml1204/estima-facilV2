@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
-import { useEffect, useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import {
   initDatabase,
@@ -110,32 +110,45 @@ export default function ProyectoDashboard() {
     }
   };
 
-  // useFocusEffect ya se dispara al montar la pantalla, por lo que el useEffect
-  // extra sería redundante. Lo mantenemos porque al volver con mismo id no siempre
-  // re-dispara el focus si la navegación fue push/back muy rápida.
-  useEffect(() => { load(); }, [id]);
+  // SOLO useFocusEffect: cubre mount inicial + re-enfoques. Tener useEffect +
+  // useFocusEffect con los mismos deps disparaba DOS loads concurrentes al
+  // montar, lo que en release Hermes puede causar rechazo de prepareAsync en
+  // SQLite. useFocusEffect ya se ejecuta al mount y en cada re-focus posterior.
   useFocusEffect(useCallback(() => { load(); }, [id]));
 
   const handleNuevaEstimacion = async () => {
     if (!proyecto) return;
-    const numero = proyecto.numero_estimacion_actual;
-    const semana = proyecto.semana_actual;
-    const hoy = new Date();
-    const lunes = new Date(hoy);
-    lunes.setDate(hoy.getDate() - hoy.getDay() + 1);
-    const domingo = new Date(lunes);
-    domingo.setDate(lunes.getDate() + 6);
+    try {
+      const numero = proyecto.numero_estimacion_actual;
+      const semana = proyecto.semana_actual;
+      const hoy = new Date();
+      const lunes = new Date(hoy);
+      lunes.setDate(hoy.getDate() - hoy.getDay() + 1);
+      const domingo = new Date(lunes);
+      domingo.setDate(lunes.getDate() + 6);
 
-    const fmt = (d: Date) =>
-      `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
+      const fmt = (d: Date) =>
+        `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
 
-    const estId = await crearEstimacion(
-      proyecto.id, numero, semana, fmt(lunes), fmt(domingo)
-    );
-    // Actualizar contadores del proyecto para que semana_actual y
-    // numero_estimacion_actual reflejen la estimacion recién creada
-    await incrementarContadoresProyecto(proyecto.id, numero, semana);
-    router.push(`/estimacion/${estId}` as any);
+      const rawEstId = await crearEstimacion(
+        proyecto.id, numero, semana, fmt(lunes), fmt(domingo)
+      );
+      // Guard bigint → number (expo-sqlite en Hermes puede devolver bigint en
+      // lastInsertRowId bajo ciertas condiciones).
+      const estId = Number(rawEstId);
+      if (!estId || isNaN(estId) || estId <= 0) {
+        console.error('[ProyectoDashboard] crearEstimacion devolvio id invalido:', rawEstId);
+        Alert.alert('Error', 'No se pudo crear la estimacion. Intenta de nuevo.');
+        return;
+      }
+      // Actualizar contadores del proyecto para que semana_actual y
+      // numero_estimacion_actual reflejen la estimacion recién creada
+      await incrementarContadoresProyecto(proyecto.id, numero, semana);
+      router.push(`/estimacion/${estId}` as any);
+    } catch (e: any) {
+      console.error('[ProyectoDashboard] handleNuevaEstimacion error:', e?.message ?? e);
+      Alert.alert('Error', `No se pudo crear la estimacion (${e?.message ?? 'error desconocido'}).`);
+    }
   };
 
   const handleVerEstimacion = (estId: number) => {
