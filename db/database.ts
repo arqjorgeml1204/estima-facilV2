@@ -128,7 +128,8 @@ export async function upsertEmpresa(nombre: string, rfc?: string, logoUri?: stri
     'INSERT INTO empresa (nombre, rfc, logo_uri, user_id) VALUES (?,?,?,?)',
     [nombre, rfc ?? null, logoUri ?? null, userId ?? '']
   );
-  return result.lastInsertRowId;
+  // expo-sqlite 16: lastInsertRowId puede ser bigint -> casteamos con Number()
+  return Number(result.lastInsertRowId);
 }
 
 // ─── Seed desde PDF extraído ──────────────────────────────────────────────────
@@ -146,6 +147,12 @@ export async function seedFromContract(
 ): Promise<number> {
   const database = getDb();
 
+  // Helper local: convierte cualquier valor a número finito; si es null/undefined/NaN
+  // o ±Infinity, retorna `fallback`. Bindear NaN o null a columnas REAL/INTEGER
+  // NOT NULL en expo-sqlite dispara java.lang.NullPointerException en prepareAsync.
+  const toFiniteNumber = (v: any, fallback: number): number =>
+    typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+
   // 1. Desarrolladora
   let desarrolladora = await database.getFirstAsync<{ id: number }>(
     'SELECT id FROM desarrolladora WHERE nombre=?', [desarrolladoraNombre]
@@ -154,12 +161,15 @@ export async function seedFromContract(
     const r = await database.runAsync(
       'INSERT INTO desarrolladora (nombre) VALUES (?)', [desarrolladoraNombre]
     );
-    desarrolladora = { id: r.lastInsertRowId };
+    // expo-sqlite 16: lastInsertRowId puede ser bigint -> casteamos con Number()
+    desarrolladora = { id: Number(r.lastInsertRowId) };
   }
 
   // 2. Derived fields from new ContratoExtraido shape
-  const totalUnidades = data.conceptos[0]?.factorTotal ?? 0;
-  const prototipo = data.conceptos[0]?.prototipos[0] ?? '';
+  const firstConcepto = data.conceptos && data.conceptos.length > 0 ? data.conceptos[0] : null;
+  const totalUnidades = toFiniteNumber(firstConcepto?.factorTotal, 0);
+  const prototipo = (firstConcepto?.prototipos && firstConcepto.prototipos[0]) || '';
+  const factorPorSeccionSafe = toFiniteNumber(firstConcepto?.factorTotal, 5);
 
   // 3. Proyecto
   // Frente: el extractor devuelve numero+nombre por separado.
@@ -171,7 +181,7 @@ export async function seedFromContract(
   const frenteLegacy = frenteNombre
     ? `FRENTE ${frenteNumero} ${frenteNombre}`
     : `FRENTE ${frenteNumero}`;
-  const fondoGarantiaPct = data.fondoGarantia != null ? data.fondoGarantia : 5;
+  const fondoGarantiaPct = toFiniteNumber(data.fondoGarantia, 5);
 
   // Sanitización null-safe: los campos de ContratoExtraido son `string | null` /
   // `number | null` (ver services/pdfExtractor/types.ts). Bindear null a columnas
@@ -179,9 +189,7 @@ export async function seedFromContract(
   // Normalizamos aquí con fallbacks seguros.
   const conjuntoSafe = (data.conjunto && data.conjunto.trim()) || 'SIN-CODIGO';
   const numeroContratoSafe = (data.numeroContrato && data.numeroContrato.trim()) || 'SIN-NUMERO';
-  const montoContratoSafe = typeof data.montoContrato === 'number' && !isNaN(data.montoContrato)
-    ? data.montoContrato
-    : 0;
+  const montoContratoSafe = toFiniteNumber(data.montoContrato, 0);
   const contratistaSafe = data.contratista ? ' — ' + data.contratista.substring(0, 50) : '';
   const nombreSafe = `${conjuntoSafe}${contratistaSafe}`;
   const descripcionObraSafe = data.descripcionObra ?? '';
@@ -208,7 +216,7 @@ export async function seedFromContract(
       conjuntoSafe,
       montoContratoSafe,
       totalUnidades,
-      data.conceptos[0]?.factorTotal ?? 5,
+      factorPorSeccionSafe,
       prototipo,
       '',  // fechaInicio — not extracted
       '',  // fechaTerminacion — not extracted
@@ -218,7 +226,8 @@ export async function seedFromContract(
       obraId,              // etiqueta por obra (null = legacy "sin obra")
     ]
   );
-  const proyectoId = proyectoResult.lastInsertRowId;
+  // expo-sqlite 16: lastInsertRowId puede ser bigint -> casteamos con Number()
+  const proyectoId = Number(proyectoResult.lastInsertRowId);
 
   // 4. Conceptos (batch insert)
   // Null-safe: tabla concepto tiene unidad/costo_unitario/factor NOT NULL.
@@ -228,15 +237,14 @@ export async function seedFromContract(
     // Split "code - description" back into separate fields
     const actividadStr = c.actividad || '';
     const dashIdx = actividadStr.indexOf(' - ');
-    const actividadCode = dashIdx >= 0 ? actividadStr.slice(0, dashIdx) : actividadStr;
-    const descripcion = dashIdx >= 0 ? actividadStr.slice(dashIdx + 3) : '';
+    const actividadCodeRaw = dashIdx >= 0 ? actividadStr.slice(0, dashIdx) : actividadStr;
+    const descripcionRaw = dashIdx >= 0 ? actividadStr.slice(dashIdx + 3) : '';
+    // Defensa extra: actividad/descripcion son NOT NULL en concepto.
+    const actividadCode = (actividadCodeRaw && actividadCodeRaw.trim()) || `SIN-COD-${i}`;
+    const descripcion = descripcionRaw || '';
     const unidadSafe = (c.unidad && c.unidad.trim()) || 'PZA';
-    const costoUnitarioSafe = typeof c.costoUnitario === 'number' && !isNaN(c.costoUnitario)
-      ? c.costoUnitario
-      : 0;
-    const factorSafe = typeof c.factorTotal === 'number' && !isNaN(c.factorTotal)
-      ? c.factorTotal
-      : 0;
+    const costoUnitarioSafe = toFiniteNumber(c.costoUnitario, 0);
+    const factorSafe = toFiniteNumber(c.factorTotal, 0);
     await database.runAsync(
       `INSERT INTO concepto (
         proyecto_id, actividad, descripcion, unidad,
@@ -621,6 +629,18 @@ export async function deleteEstimacion(estimacionId: number): Promise<void> {
 export async function updateProyectoAlias(proyectoId: number, alias: string): Promise<void> {
   const database = getDb();
   await database.runAsync('UPDATE proyecto SET alias=? WHERE id=?', [alias, proyectoId]);
+}
+
+// ─── Actualizar obra de proyecto ──────────────────────────────────────────────
+
+/**
+ * Reasigna un proyecto a otra obra (o lo deja sin obra si obraId === null).
+ * La columna obra_id es TEXT nullable y fue agregada en la migración idempotente
+ * de initDatabase. No hay FK porque las obras viven en AsyncStorage (no en SQLite).
+ */
+export async function setProyectoObra(proyectoId: number, obraId: string | null): Promise<void> {
+  const database = getDb();
+  await database.runAsync('UPDATE proyecto SET obra_id = ? WHERE id = ?', [obraId, proyectoId]);
 }
 
 // ─── Borrar Proyecto (cascada) ────────────────────────────────────────────────

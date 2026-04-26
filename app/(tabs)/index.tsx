@@ -7,13 +7,14 @@
 import {
   View, Text, TouchableOpacity, FlatList,
   ActivityIndicator, Alert, Modal, TextInput,
+  ScrollView, Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { router, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
-import { initDatabase, getProyectos, deleteProyecto, updateProyectoAlias, getTotalEstimadoPorProyecto } from '../../db/database';
+import { initDatabase, getProyectos, deleteProyecto, updateProyectoAlias, getTotalEstimadoPorProyecto, setProyectoObra } from '../../db/database';
 import { getCurrentUserId } from '../../utils/auth';
 import { hasActiveSubscription, syncSubscriptionFromCloud } from '../../utils/subscription';
 import { getProyectoDisplayWeek } from '../../utils/weekUtils';
@@ -37,6 +38,9 @@ interface Proyecto {
   obra_id?: string | null;
 }
 
+// Tipo de filtro de obra: 'todas' (todos los proyectos), 'sin' (sin obra), o id de obra concreta.
+type FiltroObra = 'todas' | 'sin' | string;
+
 export default function ProyectosScreen() {
   const [proyectos, setProyectos]  = useState<Proyecto[]>([]);
   const [loading, setLoading]      = useState(true);
@@ -46,6 +50,12 @@ export default function ProyectosScreen() {
   const [blocked, setBlocked]      = useState<boolean | null>(null);
   // Map id -> Obra para pintar badges en las cards. Re-carga con cada focus.
   const [obrasMap, setObrasMap]    = useState<Record<string, Obra>>({});
+  // Lista cruda de obras (en orden) para el filtro y el picker de reasignacion.
+  const [obrasList, setObrasList]  = useState<Obra[]>([]);
+  // Filtro de obra activo en la lista. 'todas' por default.
+  const [filtroObraId, setFiltroObraId] = useState<FiltroObra>('todas');
+  // Picker de reasignacion: cuando es != null, abre Modal para cambiar obra del proyecto.
+  const [reassignProyecto, setReassignProyecto] = useState<Proyecto | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -117,6 +127,7 @@ export default function ProyectosScreen() {
       const map: Record<string, Obra> = {};
       for (const o of obras) map[o.id] = o;
       setObrasMap(map);
+      setObrasList(obras);
 
       const proyectosConRestante = await Promise.all(
         (data as Proyecto[]).map(async (p) => {
@@ -142,20 +153,46 @@ export default function ProyectosScreen() {
   };
 
   const handleDelete = (proyecto: Proyecto) => {
-    Alert.alert(
-      'Borrar proyecto',
-      `¿Borrar proyecto ${proyecto.nombre}? Esta acción no se puede deshacer.`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Borrar', style: 'destructive',
-          onPress: async () => {
-            await deleteProyecto(proyecto.id);
-            await loadProyectos();
+    // Diferimos el Alert un tick para evitar race con el press del card padre:
+    // si el outer TouchableOpacity fuera también a disparar router.push, ya
+    // habremos perdido foco antes de que el Alert reciba la respuesta. Con
+    // setTimeout(0) aseguramos que cualquier navegación en cola se procese
+    // primero (y nuestro responder bloquea esa nav, ver wrapper de acciones).
+    setTimeout(() => {
+      Alert.alert(
+        'Borrar proyecto',
+        `¿Borrar proyecto ${proyecto.nombre}? Esta acción no se puede deshacer.`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Borrar', style: 'destructive',
+            onPress: async () => {
+              try {
+                await deleteProyecto(proyecto.id);
+                await loadProyectos();
+              } catch (e: any) {
+                console.error('[ProyectosScreen] deleteProyecto error:', e?.message ?? e);
+                Alert.alert('Error', `No se pudo borrar el proyecto (${e?.message ?? 'error desconocido'}).`);
+              }
+            },
           },
-        },
-      ],
-    );
+        ],
+      );
+    }, 0);
+  };
+
+  // Reasigna obra al proyecto seleccionado en el picker. obraId === null => "Sin obra".
+  const handleReassignObra = async (obraId: string | null) => {
+    if (!reassignProyecto) return;
+    const target = reassignProyecto;
+    setReassignProyecto(null);
+    try {
+      await setProyectoObra(target.id, obraId);
+      await loadProyectos();
+    } catch (e: any) {
+      console.error('[ProyectosScreen] setProyectoObra error:', e?.message ?? e);
+      Alert.alert('Error', `No se pudo reasignar la obra (${e?.message ?? 'error desconocido'}).`);
+    }
   };
 
   const handleSaveAlias = async () => {
@@ -200,20 +237,33 @@ export default function ProyectosScreen() {
         elevation: 2,
       }}
     >
-      {/* Badge de OBRA arriba de todo, resaltado con color por obra */}
-      <View style={{ flexDirection: 'row', marginBottom: 8 }}>
-        <View style={{
-          backgroundColor: obraBadgeColor, borderRadius: 6,
-          paddingHorizontal: 10, paddingVertical: 4,
-          maxWidth: '100%',
-        }}>
+      {/* Badge de OBRA arriba de todo, resaltado con color por obra. Tappable
+          para reasignar obra al proyecto. onStartShouldSetResponder evita
+          que el card padre navegue al detalle cuando el usuario toca el badge. */}
+      <View
+        style={{ flexDirection: 'row', marginBottom: 8 }}
+        onStartShouldSetResponder={() => true}
+        onResponderTerminationRequest={() => false}
+      >
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={() => setReassignProyecto(item)}
+          style={{
+            backgroundColor: obraBadgeColor, borderRadius: 6,
+            paddingHorizontal: 10, paddingVertical: 4,
+            maxWidth: '100%',
+            flexDirection: 'row', alignItems: 'center', gap: 4,
+          }}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        >
           <Text
             numberOfLines={1}
             style={{ color: '#ffffff', fontSize: 11, fontWeight: '800', letterSpacing: 0.5 }}
           >
             {obraBadgeLabel}
           </Text>
-        </View>
+          <MaterialIcons name="edit" size={11} color="#ffffff" />
+        </TouchableOpacity>
       </View>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <View style={{ flex: 1 }}>
@@ -246,16 +296,26 @@ export default function ProyectosScreen() {
             {item.numero_contrato}
           </Text>
         </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        {/* Wrapper que captura el responder para los iconos de accion. En RN
+            Android, e.stopPropagation no impide que el TouchableOpacity padre
+            (la card) tambien dispare onPress -> el router.push navegaba al
+            detalle ANTES de que el Alert recibiera respuesta, por eso el
+            "borrar" parecia no hacer nada. Con onStartShouldSetResponder en
+            true, esta View se queda con el touch y el padre nunca dispara. */}
+        <View
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+          onStartShouldSetResponder={() => true}
+          onResponderTerminationRequest={() => false}
+        >
           <TouchableOpacity
-            onPress={(e) => { e.stopPropagation?.(); setEditAlias(item.alias || ''); setEditingId(item.id); }}
+            onPress={() => { setEditAlias(item.alias || ''); setEditingId(item.id); }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             activeOpacity={0.7}
           >
             <MaterialIcons name="edit" size={18} color="#2196F3" />
           </TouchableOpacity>
           <TouchableOpacity
-            onPress={(e) => { e.stopPropagation?.(); handleDelete(item); }}
+            onPress={() => handleDelete(item)}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             activeOpacity={0.7}
           >
@@ -298,6 +358,21 @@ export default function ProyectosScreen() {
     );
   };
 
+  // Aplica filtro de obra a la lista renderizada. 'todas' = sin filtro,
+  // 'sin' = obra_id null/empty, otro = match exacto contra item.obra_id.
+  const proyectosFiltrados = useMemo(() => {
+    if (filtroObraId === 'todas') return proyectos;
+    if (filtroObraId === 'sin') return proyectos.filter(p => !p.obra_id);
+    return proyectos.filter(p => p.obra_id === filtroObraId);
+  }, [proyectos, filtroObraId]);
+
+  // Etiqueta visible del filtro activo (para el chip resaltado).
+  const filtroLabel = filtroObraId === 'todas'
+    ? 'Todas'
+    : filtroObraId === 'sin'
+    ? 'Sin obra'
+    : (obrasMap[filtroObraId]?.nombre ?? 'Obra eliminada');
+
   if (blocked === true) {
     return <BlockScreen />;
   }
@@ -314,7 +389,7 @@ export default function ProyectosScreen() {
             Proyectos
           </Text>
           <Text style={{ fontSize: 11, color: '#737685', marginTop: 1 }}>
-            {proyectos.length} contrato{proyectos.length !== 1 ? 's' : ''} activo{proyectos.length !== 1 ? 's' : ''}
+            {proyectosFiltrados.length} de {proyectos.length} contrato{proyectos.length !== 1 ? 's' : ''} activo{proyectos.length !== 1 ? 's' : ''}
           </Text>
         </View>
         <TouchableOpacity
@@ -330,6 +405,85 @@ export default function ProyectosScreen() {
           <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '700' }}>Nuevo</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Filtro de obra: chips horizontales coloreados. Solo se muestra si
+          el usuario tiene obras o proyectos cargados (caso vacio muestra el
+          empty state mas abajo). */}
+      {!loading && proyectos.length > 0 ? (
+        <View style={{ borderBottomWidth: 1, borderBottomColor: '#eef0f2', backgroundColor: '#f8f9fb' }}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 10, gap: 8 }}
+          >
+            {/* Chip "Todas" */}
+            <TouchableOpacity
+              onPress={() => setFiltroObraId('todas')}
+              activeOpacity={0.8}
+              style={{
+                paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16,
+                backgroundColor: filtroObraId === 'todas' ? '#003d9b' : '#ffffff',
+                borderWidth: 1,
+                borderColor: filtroObraId === 'todas' ? '#003d9b' : '#d4d6de',
+              }}
+            >
+              <Text style={{
+                fontSize: 11, fontWeight: '700', letterSpacing: 0.3,
+                color: filtroObraId === 'todas' ? '#ffffff' : '#434654',
+              }}>
+                Todas
+              </Text>
+            </TouchableOpacity>
+            {/* Chip "Sin obra" */}
+            <TouchableOpacity
+              onPress={() => setFiltroObraId('sin')}
+              activeOpacity={0.8}
+              style={{
+                paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16,
+                backgroundColor: filtroObraId === 'sin' ? getObraColorFallback() : '#ffffff',
+                borderWidth: 1,
+                borderColor: filtroObraId === 'sin' ? getObraColorFallback() : '#d4d6de',
+              }}
+            >
+              <Text style={{
+                fontSize: 11, fontWeight: '700', letterSpacing: 0.3,
+                color: filtroObraId === 'sin' ? '#ffffff' : '#434654',
+              }}>
+                Sin obra
+              </Text>
+            </TouchableOpacity>
+            {/* Chip por cada obra existente */}
+            {obrasList.map((obra) => {
+              const active = filtroObraId === obra.id;
+              const color = getObraColorById(obra.id);
+              return (
+                <TouchableOpacity
+                  key={obra.id}
+                  onPress={() => setFiltroObraId(obra.id)}
+                  activeOpacity={0.8}
+                  style={{
+                    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16,
+                    backgroundColor: active ? color : '#ffffff',
+                    borderWidth: 1,
+                    borderColor: active ? color : '#d4d6de',
+                  }}
+                >
+                  <Text
+                    numberOfLines={1}
+                    style={{
+                      fontSize: 11, fontWeight: '700', letterSpacing: 0.3,
+                      color: active ? '#ffffff' : '#434654',
+                      maxWidth: 140,
+                    }}
+                  >
+                    {obra.nombre}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      ) : null}
 
       {loading ? (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -354,9 +508,31 @@ export default function ProyectosScreen() {
             <Text style={{ color: '#ffffff', fontWeight: '700' }}>Cargar contrato</Text>
           </TouchableOpacity>
         </View>
+      ) : proyectosFiltrados.length === 0 ? (
+        // Empty state cuando el filtro deja la lista vacia (hay proyectos pero
+        // ninguno coincide con la obra seleccionada).
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 }}>
+          <MaterialIcons name="filter-alt" size={56} color="#c3c6d6" />
+          <Text style={{ fontSize: 15, fontWeight: '700', color: '#191c1e', marginTop: 14, textAlign: 'center' }}>
+            Sin proyectos en "{filtroLabel}"
+          </Text>
+          <Text style={{ fontSize: 12, color: '#737685', marginTop: 6, textAlign: 'center', lineHeight: 18 }}>
+            Cambia el filtro de obra para ver{'\n'}otros contratos.
+          </Text>
+          <TouchableOpacity
+            onPress={() => setFiltroObraId('todas')}
+            style={{
+              marginTop: 18, backgroundColor: '#003d9b',
+              borderRadius: 10, paddingHorizontal: 18, paddingVertical: 9,
+            }}
+            activeOpacity={0.85}
+          >
+            <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 12 }}>Mostrar todas</Text>
+          </TouchableOpacity>
+        </View>
       ) : (
         <FlatList
-          data={proyectos}
+          data={proyectosFiltrados}
           keyExtractor={(item) => item.id.toString()}
           renderItem={renderProyecto}
           contentContainerStyle={{ paddingTop: 16, paddingBottom: 32 }}
@@ -402,6 +578,125 @@ export default function ProyectosScreen() {
         onComplete={handleContractLoaded}
         onSkip={() => setShowModal(false)}
       />
+
+      {/* Modal: reasignar obra al proyecto seleccionado.
+          - "Sin obra" -> setProyectoObra(id, null) -> badge gris.
+          - Cualquier obra existente -> setProyectoObra(id, obra.id).
+          No incluye "Crear nueva obra" porque el flujo vive en Ajustes;
+          mantenemos este picker enfocado solo en reasignar. */}
+      <Modal
+        visible={reassignProyecto != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setReassignProyecto(null)}
+      >
+        <Pressable
+          onPress={() => setReassignProyecto(null)}
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' }}
+        >
+          <Pressable
+            onPress={() => { /* swallow press to evitar cerrar al tocar el panel */ }}
+            style={{
+              backgroundColor: '#ffffff',
+              borderTopLeftRadius: 16, borderTopRightRadius: 16,
+              paddingTop: 14, paddingBottom: 24, maxHeight: '70%',
+            }}
+          >
+            <View style={{ alignItems: 'center', paddingBottom: 8 }}>
+              <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: '#d4d6de' }} />
+            </View>
+            <Text style={{
+              fontSize: 15, fontWeight: '800', color: '#191c1e',
+              paddingHorizontal: 20, paddingBottom: 12,
+            }}>
+              Reasignar obra
+            </Text>
+            {reassignProyecto ? (
+              <Text style={{
+                fontSize: 11, color: '#737685', paddingHorizontal: 20, marginTop: -8, marginBottom: 12,
+              }}>
+                {reassignProyecto.nombre}
+              </Text>
+            ) : null}
+            <FlatList
+              data={obrasList}
+              keyExtractor={(o) => o.id}
+              ListHeaderComponent={
+                <TouchableOpacity
+                  onPress={() => handleReassignObra(null)}
+                  activeOpacity={0.7}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center',
+                    paddingHorizontal: 20, paddingVertical: 12, gap: 12,
+                  }}
+                >
+                  <View style={{
+                    width: 14, height: 14, borderRadius: 7,
+                    backgroundColor: getObraColorFallback(),
+                  }} />
+                  <Text style={{ flex: 1, fontSize: 13, fontWeight: '600', color: '#434654' }}>
+                    Sin obra
+                  </Text>
+                  {reassignProyecto && !reassignProyecto.obra_id ? (
+                    <MaterialIcons name="check" size={18} color="#003d9b" />
+                  ) : null}
+                </TouchableOpacity>
+              }
+              renderItem={({ item: obra }) => {
+                const selected = reassignProyecto?.obra_id === obra.id;
+                return (
+                  <TouchableOpacity
+                    onPress={() => handleReassignObra(obra.id)}
+                    activeOpacity={0.7}
+                    style={{
+                      flexDirection: 'row', alignItems: 'center',
+                      paddingHorizontal: 20, paddingVertical: 12, gap: 12,
+                    }}
+                  >
+                    <View style={{
+                      width: 14, height: 14, borderRadius: 7,
+                      backgroundColor: getObraColorById(obra.id),
+                    }} />
+                    <Text
+                      numberOfLines={1}
+                      style={{ flex: 1, fontSize: 13, fontWeight: '600', color: '#191c1e' }}
+                    >
+                      {obra.nombre}
+                    </Text>
+                    {selected ? (
+                      <MaterialIcons name="check" size={18} color="#003d9b" />
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              }}
+              ItemSeparatorComponent={() => (
+                <View style={{ height: 1, backgroundColor: '#f3f4f6', marginLeft: 46 }} />
+              )}
+              ListEmptyComponent={
+                <Text style={{
+                  paddingHorizontal: 20, paddingVertical: 20,
+                  fontSize: 12, color: '#737685', textAlign: 'center',
+                }}>
+                  No hay obras creadas. Crea una en Ajustes.
+                </Text>
+              }
+            />
+            <TouchableOpacity
+              onPress={() => setReassignProyecto(null)}
+              style={{
+                marginTop: 8, marginHorizontal: 20,
+                paddingVertical: 10, borderRadius: 10,
+                backgroundColor: '#eef0f2', alignItems: 'center',
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#434654' }}>
+                Cancelar
+              </Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }

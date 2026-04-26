@@ -64,7 +64,8 @@ export default function ContractUploadModal({ visible, onComplete, onSkip }: Pro
       setFileName(file.name);
       await handleExtract(file.uri);
     } catch (e: any) {
-      setErrorMsg('No se pudo abrir el archivo. Intenta de nuevo.');
+      const detalle = e?.message ? ` (${e.message})` : '';
+      setErrorMsg(`No se pudo abrir el archivo${detalle}. Intenta de nuevo.`);
       setStep('error');
     }
   };

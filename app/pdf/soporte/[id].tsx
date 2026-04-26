@@ -152,6 +152,59 @@ export default function PdfSoporte() {
   const [evidenciasBase64, setEvidenciasBase64] = useState<Record<string, string>>({});
   const [croquisBase64, setCroquisBase64] = useState<Record<string, string>>({});
   const [estimadoAcumuladoProyecto, setEstimadoAcumuladoProyecto] = useState<number>(0);
+  // Marca de hidratación: solo persistimos overrides DESPUÉS de cargarlos
+  // desde AsyncStorage para evitar pisar lo guardado con el estado inicial vacío.
+  const [hydratedOverrides, setHydratedOverrides] = useState(false);
+
+  // ── Hidratación de overrides desde AsyncStorage ────────────────────────────
+  // Bug reportado: al cerrar el teclado o salir de la pantalla de soporte, los
+  // valores editados de ANT/ESTA EST/AVANCE se perdían. Causa: vivían solo en
+  // estado de componente, que se desmonta al navegar away. Fix: persistimos
+  // los 3 maps en AsyncStorage por estimación-id, y rehidratamos al entrar.
+  useEffect(() => {
+    const numericId = Number(id);
+    if (!id || isNaN(numericId) || numericId <= 0) return;
+    const key = `@estimafacil:soporte_overrides:${numericId}`;
+    (async () => {
+      try {
+        const stored = await AsyncStorage.getItem(key);
+        if (stored) {
+          const data = JSON.parse(stored);
+          if (data?.editedEstaEst && typeof data.editedEstaEst === 'object') {
+            setEditedEstaEst(data.editedEstaEst);
+          }
+          if (data?.editedAnt && typeof data.editedAnt === 'object') {
+            setEditedAnt(data.editedAnt);
+          }
+          if (data?.editedAvance && typeof data.editedAvance === 'object') {
+            setEditedAvance(data.editedAvance);
+          }
+        }
+      } catch (e: any) {
+        console.warn('[PdfSoporte] hidratar overrides falló:', e?.message ?? e);
+      } finally {
+        setHydratedOverrides(true);
+      }
+    })();
+  }, [id]);
+
+  // Persistir overrides cada vez que cambian (debounced 250ms para evitar
+  // I/O por keystroke). Solo después de hidratar para no pisar lo guardado.
+  useEffect(() => {
+    if (!hydratedOverrides) return;
+    const numericId = Number(id);
+    if (!id || isNaN(numericId) || numericId <= 0) return;
+    const key = `@estimafacil:soporte_overrides:${numericId}`;
+    const t = setTimeout(() => {
+      AsyncStorage.setItem(
+        key,
+        JSON.stringify({ editedEstaEst, editedAnt, editedAvance })
+      ).catch((e) => {
+        console.warn('[PdfSoporte] persistir overrides falló:', e?.message ?? e);
+      });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [id, hydratedOverrides, editedEstaEst, editedAnt, editedAvance]);
 
   useEffect(() => {
     (async () => {
