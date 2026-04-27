@@ -70,9 +70,21 @@ export default function EvidenciaScreen() {
     setExporting(true);
     try {
       // 1. Leer todas las imágenes en base64 ANTES de generar el HTML
+      // V7 (Security audit): sanity-check del URI antes de leer del FS.
+      // Rechazamos paths con "..", esquemas no-file, o vacíos para evitar
+      // que datos corruptos hagan que getInfoAsync/readAsStringAsync
+      // intenten leer fuera del sandbox.
+      const isSafeFsUri = (u: string): boolean => {
+        if (!u || typeof u !== 'string') return false;
+        if (u.indexOf('..') !== -1) return false;
+        // file://, content://, ph://, asset:// son válidos en RN. Cualquier
+        // otro esquema (http, javascript:, data: largo, etc.) no aplica aquí.
+        return /^(file|content|ph|asset):\/\//i.test(u);
+      };
       const base64Map: Record<number, string> = {};
       for (const ev of evidencias) {
         try {
+          if (!isSafeFsUri(ev.imagen_uri)) continue;
           const info = await FileSystem.getInfoAsync(ev.imagen_uri);
           if (info.exists) {
             const b64 = await FileSystem.readAsStringAsync(ev.imagen_uri, { encoding: 'base64' });

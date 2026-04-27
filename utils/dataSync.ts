@@ -166,12 +166,12 @@ export async function backupToCloud(email: string): Promise<boolean> {
     );
 
     if (!res.ok) {
-      console.warn('[DATA-SYNC] backup fallo:', res.status);
+      if (__DEV__) console.warn('[DATA-SYNC] backup fallo:', res.status);
       return false;
     }
     return true;
   } catch (e) {
-    console.warn('[DATA-SYNC] backup excepcion:', e);
+    if (__DEV__) console.warn('[DATA-SYNC] backup excepcion:', e);
     return false;
   }
 }
@@ -210,14 +210,14 @@ export async function restoreFromCloud(email: string): Promise<boolean> {
 
     const snapshot: UserSnapshot = rows[0].snapshot;
     if (!snapshot || snapshot.version !== SNAPSHOT_VERSION) {
-      console.warn('[DATA-SYNC] snapshot version incompatible:', snapshot?.version);
+      if (__DEV__) console.warn('[DATA-SYNC] snapshot version incompatible:', snapshot?.version);
       return false;
     }
 
     await hydrateDbFromSnapshot(snapshot);
     return true;
   } catch (e) {
-    console.warn('[DATA-SYNC] restore excepcion:', e);
+    if (__DEV__) console.warn('[DATA-SYNC] restore excepcion:', e);
     return false;
   }
 }
@@ -245,7 +245,7 @@ async function hydrateDbFromSnapshot(s: UserSnapshot): Promise<void> {
       );
     } catch (e) {
       // Silencioso: una fila corrupta no debe romper la restauracion completa
-      console.warn(`[DATA-SYNC] insert ${table} fallo:`, e);
+      if (__DEV__) console.warn(`[DATA-SYNC] insert ${table} fallo:`, e);
     }
   };
 

@@ -68,9 +68,16 @@ export default function CroquisScreen() {
     setExporting(true);
     try {
       // 1. Leer todas las imágenes en base64 ANTES de generar el HTML
+      // V7 (Security audit): sanity-check de URI antes de tocar el FS.
+      const isSafeFsUri = (u: string): boolean => {
+        if (!u || typeof u !== 'string') return false;
+        if (u.indexOf('..') !== -1) return false;
+        return /^(file|content|ph|asset):\/\//i.test(u);
+      };
       const base64Map: Record<number, string> = {};
       for (const c of croquisList) {
         try {
+          if (!isSafeFsUri(c.imagen_uri)) continue;
           const info = await FileSystem.getInfoAsync(c.imagen_uri);
           if (info.exists) {
             const b64 = await FileSystem.readAsStringAsync(c.imagen_uri, { encoding: 'base64' });

@@ -33,12 +33,12 @@ export async function sendEmail(params: EmailParams): Promise<void> {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      console.warn('[EmailJS] Error enviando email:', res.status, await res.text());
+      if (__DEV__) console.warn('[EmailJS] Error enviando email:', res.status, await res.text());
     } else {
-      console.log('[EmailJS] Email enviado a:', params.to_email);
+      if (__DEV__) console.log('[EmailJS] Email enviado a:', params.to_email);
     }
   } catch (e) {
-    console.warn('[EmailJS] Excepción al enviar email:', e);
+    if (__DEV__) console.warn('[EmailJS] Excepción al enviar email:', e);
   }
 }
 

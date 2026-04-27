@@ -186,6 +186,19 @@ const PdfWebViewBridge = forwardRef<PdfBridgeRef>((_, ref) => {
   useImperativeHandle(ref, () => ({
     extractText(base64Pdf: string): Promise<string[]> {
       return new Promise<string[]>((resolve, reject) => {
+        // V3 (Security audit): validar que el payload sea base64 estricto
+        // ([A-Za-z0-9+/=] sin saltos de línea ni símbolos exóticos). Si no
+        // lo es, rechazamos inmediatamente — no inyectamos string arbitrario
+        // dentro de la WebView.
+        if (typeof base64Pdf !== 'string' || base64Pdf.length === 0) {
+          reject(new Error('PDF payload inválido (string vacío).'));
+          return;
+        }
+        if (!/^[A-Za-z0-9+/=\r\n]+$/.test(base64Pdf)) {
+          reject(new Error('PDF payload inválido (no es base64).'));
+          return;
+        }
+
         const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
         const timer = setTimeout(() => {
@@ -195,9 +208,17 @@ const PdfWebViewBridge = forwardRef<PdfBridgeRef>((_, ref) => {
 
         pendingRef.current.set(id, { resolve, reject, timer });
 
+        // V3 hardening: doble JSON.stringify + escape de U+2028/U+2029 para
+        // que ningún byte del payload pueda romper el contexto JS al
+        // ser inyectado. La WebView ejecuta SIEMPRE el mismo template fijo
+        // (dispatchEvent('message')) y el dato viaja como string JSON
+        // parseado por la WebView (no como código).
         const message = JSON.stringify({ type: 'EXTRACT', id, pdf: base64Pdf });
+        const safeLiteral = JSON.stringify(message)
+          .replace(/\u2028/g, '\\u2028')
+          .replace(/\u2029/g, '\\u2029');
         webViewRef.current?.injectJavaScript(
-          `window.dispatchEvent(new MessageEvent('message', { data: ${JSON.stringify(message)} })); true;`
+          `window.dispatchEvent(new MessageEvent('message', { data: ${safeLiteral} })); true;`
         );
       });
     },

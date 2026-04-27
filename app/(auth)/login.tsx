@@ -361,7 +361,7 @@ export default function LoginScreen() {
 
           {/* ¿Olvidaste tu contraseña? */}
           <TouchableOpacity
-            onPress={() => Alert.alert('Próximamente', 'Función próximamente disponible.')}
+            onPress={() => router.push('/(auth)/recuperar' as any)}
             style={{ alignItems: 'center', paddingVertical: 4 }}
             activeOpacity={0.7}
           >

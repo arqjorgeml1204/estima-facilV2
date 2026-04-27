@@ -616,17 +616,28 @@ export default function EstimacionGrid() {
         return;
       }
 
-      const proy = await getProyectoById(est.proyecto_id);
+      // V11/V12 defensive cast: expo-sqlite SDK16 puede devolver INTEGER como
+      // bigint en Hermes; bindear bigint/undefined/NaN en prepareAsync lanza
+      // "call to function NativeStatement". Coercemos a Number siempre.
+      const proyectoIdSafe = Number((est as any)?.proyecto_id);
+      if (!Number.isFinite(proyectoIdSafe) || proyectoIdSafe <= 0) {
+        console.warn('[EstimacionGrid] proyecto_id invalido en estimacion:', (est as any)?.proyecto_id);
+        Alert.alert('Error', 'La estimacion no tiene un proyecto asociado valido.');
+        router.back();
+        return;
+      }
+
+      const proy = await getProyectoById(proyectoIdSafe);
       if (!proy) {
-        console.warn('[EstimacionGrid] getProyectoById retorno null para id:', est.proyecto_id);
+        console.warn('[EstimacionGrid] getProyectoById retorno null para id:', proyectoIdSafe);
         Alert.alert('Error', 'No se encontro el proyecto asociado.');
         router.back();
         return;
       }
 
-      const concs = await getConceptosByProyecto(est.proyecto_id) as Concepto[];
+      const concs = await getConceptosByProyecto(proyectoIdSafe) as Concepto[];
       const dets = await getDetallesByEstimacion(estId);
-      const prior = await getCantidadesAnteriores(est.proyecto_id, estId);
+      const prior = await getCantidadesAnteriores(proyectoIdSafe, estId);
 
       const detMap: DetalleMap = {};
       for (const d of dets) {
@@ -1547,15 +1558,6 @@ export default function EstimacionGrid() {
 
       {/* ── Input Manual Modal ── */}
       <InputModal
-        visible={modalVisible}
-        concepto={modalConcepto}
-        valorActual={modalConcepto ? (detalles[modalConcepto.id]?.cantidad_esta_est ?? 0) : 0}
-        onConfirm={handleModalConfirm}
-        onClose={() => setModalVisible(false)}
-      />
-
-      {/* ── Summary Modal (Issue #14) ── */}
-      <SummaryModal
         visible={summaryVisible}
         conceptos={conceptos}
         detalles={detalles}

@@ -270,6 +270,7 @@ export async function seedFromContract(
 // ─── Proyectos ────────────────────────────────────────────────────────────────
 
 export async function getProyectos(userId?: string) {
+  await initDatabase();
   const database = getDb();
   // Si userId es vacio o 'default', mostrar todos (backwards compat para usuarios existentes)
   if (!userId || userId === 'default') {
@@ -280,23 +281,31 @@ export async function getProyectos(userId?: string) {
       obra_id: string | null;
     }>('SELECT * FROM proyecto ORDER BY created_at DESC');
   }
+  // Defensa: bind siempre como string (jamás undefined/Symbol/Function).
+  const uidSafe = String(userId);
   return database.getAllAsync<{
     id: number; codigo: string; numero_contrato: string;
     nombre: string; monto_contrato: number;
     semana_actual: number; numero_estimacion_actual: number;
     obra_id: string | null;
-  }>('SELECT * FROM proyecto WHERE user_id=? OR user_id=\'\' ORDER BY created_at DESC', [userId]);
+  }>('SELECT * FROM proyecto WHERE user_id=? OR user_id=\'\' ORDER BY created_at DESC', [uidSafe]);
 }
 
 export async function getProyectoById(id: number) {
-  return getDb().getFirstAsync<any>('SELECT * FROM proyecto WHERE id=?', [id]);
+  await initDatabase();
+  const idSafe = Number(id);
+  if (!Number.isFinite(idSafe) || idSafe <= 0) return null;
+  return getDb().getFirstAsync<any>('SELECT * FROM proyecto WHERE id=?', [idSafe]);
 }
 
 // ─── Conceptos ────────────────────────────────────────────────────────────────
 
 export async function getConceptosByProyecto(proyectoId: number) {
+  await initDatabase();
+  const idSafe = Number(proyectoId);
+  if (!Number.isFinite(idSafe) || idSafe <= 0) return [];
   return getDb().getAllAsync<any>(
-    'SELECT * FROM concepto WHERE proyecto_id=? ORDER BY orden', [proyectoId]
+    'SELECT * FROM concepto WHERE proyecto_id=? ORDER BY orden', [idSafe]
   );
 }
 
@@ -313,19 +322,27 @@ export async function crearEstimacion(
   const r = await getDb().runAsync(
     `INSERT INTO estimacion (proyecto_id, numero, semana, week_number, periodo_desde, periodo_hasta)
      VALUES (?,?,?,?,?,?)`,
-    [proyectoId, numero, semana, weekNumber, periodoDesde, periodoHasta]
+    [Number(proyectoId), Number(numero), Number(semana), Number(weekNumber), periodoDesde ?? '', periodoHasta ?? '']
   );
-  return r.lastInsertRowId;
+  // expo-sqlite 16: lastInsertRowId es bigint en Hermes — castear evita
+  // "call to function NativeStatement" cuando el bigint se reusa como bind.
+  return Number(r.lastInsertRowId);
 }
 
 export async function getEstimacionesByProyecto(proyectoId: number) {
+  await initDatabase();
+  const idSafe = Number(proyectoId);
+  if (!Number.isFinite(idSafe) || idSafe <= 0) return [];
   return getDb().getAllAsync<any>(
-    'SELECT * FROM estimacion WHERE proyecto_id=? ORDER BY numero DESC', [proyectoId]
+    'SELECT * FROM estimacion WHERE proyecto_id=? ORDER BY numero DESC', [idSafe]
   );
 }
 
 export async function getEstimacionById(id: number) {
-  return getDb().getFirstAsync<any>('SELECT * FROM estimacion WHERE id=?', [id]);
+  await initDatabase();
+  const idSafe = Number(id);
+  if (!Number.isFinite(idSafe) || idSafe <= 0) return null;
+  return getDb().getFirstAsync<any>('SELECT * FROM estimacion WHERE id=?', [idSafe]);
 }
 
 // ─── Detalles ─────────────────────────────────────────────────────────────────
@@ -384,13 +401,16 @@ export async function upsertDetalle(
 }
 
 export async function getDetallesByEstimacion(estimacionId: number) {
+  await initDatabase();
+  const idSafe = Number(estimacionId);
+  if (!Number.isFinite(idSafe) || idSafe <= 0) return [];
   return getDb().getAllAsync<any>(
     `SELECT d.*, c.actividad, c.descripcion, c.unidad, c.costo_unitario, c.factor
      FROM detalle_estimacion d
      JOIN concepto c ON c.id = d.concepto_id
      WHERE d.estimacion_id=?
      ORDER BY c.orden`,
-    [estimacionId]
+    [idSafe]
   );
 }
 
@@ -410,9 +430,9 @@ export async function insertEvidencia(
   const r = await getDb().runAsync(
     `INSERT INTO evidencia (estimacion_id, concepto_id, imagen_uri, actividad, descripcion)
      VALUES (?,?,?,?,?)`,
-    [estimacionId, conceptoId ?? null, imagenUri, actividad ?? null, descripcion ?? null]
+    [Number(estimacionId), conceptoId != null ? Number(conceptoId) : null, imagenUri ?? '', actividad ?? null, descripcion ?? null]
   );
-  return r.lastInsertRowId;
+  return Number(r.lastInsertRowId);
 }
 
 export async function deleteEvidencia(id: number) {
@@ -431,9 +451,9 @@ export async function getCroquisByEstimacion(estimacionId: number) {
 export async function insertCroquis(estimacionId: number, imagenUri: string, descripcion?: string) {
   const r = await getDb().runAsync(
     'INSERT INTO croquis (estimacion_id, imagen_uri, descripcion) VALUES (?,?,?)',
-    [estimacionId, imagenUri, descripcion ?? null]
+    [Number(estimacionId), imagenUri ?? '', descripcion ?? null]
   );
-  return r.lastInsertRowId;
+  return Number(r.lastInsertRowId);
 }
 
 export async function deleteCroquis(id: number) {
@@ -457,6 +477,9 @@ export async function deleteCroquis(id: number) {
  * todas sus estimaciones. Eso representa el total de obra avanzada.
  */
 export async function getTotalEstimadoPorProyecto(proyectoId: number): Promise<number> {
+  await initDatabase();
+  const idSafe = Number(proyectoId);
+  if (!Number.isFinite(idSafe) || idSafe <= 0) return 0;
   const result = await getDb().getFirstAsync<{ total: number }>(
     `SELECT COALESCE(SUM(max_importe), 0) as total
      FROM (
@@ -466,7 +489,7 @@ export async function getTotalEstimadoPorProyecto(proyectoId: number): Promise<n
        WHERE e.proyecto_id = ?
        GROUP BY de.concepto_id
      )`,
-    [proyectoId]
+    [idSafe]
   );
   return result?.total ?? 0;
 }
@@ -562,7 +585,13 @@ export async function getCantidadesAnteriores(
   proyectoId: number,
   estimacionActualId: number
 ): Promise<Record<number, { cantidad: number; semana: number }>> {
+  await initDatabase();
   const database = getDb();
+  const proyIdSafe = Number(proyectoId);
+  const estIdSafe = Number(estimacionActualId);
+  if (!Number.isFinite(proyIdSafe) || proyIdSafe <= 0 || !Number.isFinite(estIdSafe) || estIdSafe <= 0) {
+    return {};
+  }
   const rows = await database.getAllAsync<{
     concepto_id: number;
     total_cantidad: number;
@@ -575,7 +604,7 @@ export async function getCantidadesAnteriores(
      JOIN estimacion e ON e.id = d.estimacion_id
      WHERE e.proyecto_id = ? AND e.id != ? AND d.cantidad_acumulada > 0
      GROUP BY d.concepto_id`,
-    [proyectoId, estimacionActualId]
+    [proyIdSafe, estIdSafe]
   );
 
   const result: Record<number, { cantidad: number; semana: number }> = {};
@@ -639,28 +668,49 @@ export async function updateProyectoAlias(proyectoId: number, alias: string): Pr
  * de initDatabase. No hay FK porque las obras viven en AsyncStorage (no en SQLite).
  */
 export async function setProyectoObra(proyectoId: number, obraId: string | null): Promise<void> {
+  // Defensa: si la DB aún no fue inicializada (deep-link, focus race), inicializa
+  // antes de bindear. expo-sqlite SDK 16 + Hermes lanza "call to function
+  // NativeStatement" cuando prepareAsync recibe binds inválidos o se invoca
+  // sin DB lista.
+  await initDatabase();
   const database = getDb();
-  await database.runAsync('UPDATE proyecto SET obra_id = ? WHERE id = ?', [obraId, proyectoId]);
+  // Coerción defensiva: proyectoId siempre Number; obraId acepta string o null,
+  // pero rechazamos undefined/NaN/Symbol/Function que disparan NativeStatement.
+  const idSafe = Number(proyectoId);
+  if (!Number.isFinite(idSafe) || idSafe <= 0) {
+    throw new Error('setProyectoObra: proyectoId inválido');
+  }
+  const obraIdSafe: string | null =
+    obraId == null ? null : (typeof obraId === 'string' ? obraId : String(obraId));
+  await database.runAsync('UPDATE proyecto SET obra_id = ? WHERE id = ?', [obraIdSafe, idSafe]);
 }
 
 // ─── Borrar Proyecto (cascada) ────────────────────────────────────────────────
 
 export async function deleteProyecto(proyectoId: number): Promise<void> {
+  // Defensa: garantizar DB inicializada (evita NativeStatement por race con focus).
+  await initDatabase();
   const database = getDb();
+  // Castear a Number para evitar bigint propagado y NaN como bind.
+  const idSafe = Number(proyectoId);
+  if (!Number.isFinite(idSafe) || idSafe <= 0) {
+    throw new Error('deleteProyecto: proyectoId inválido');
+  }
   // Borrar en orden: detalle_estimacion → estimacion → concepto → proyecto
   // (evidencia y croquis se eliminan por CASCADE desde estimacion si está configurado,
   // pero lo hacemos explícito para garantizar integridad)
   const estimaciones = await database.getAllAsync<{ id: number }>(
-    'SELECT id FROM estimacion WHERE proyecto_id=?', [proyectoId]
+    'SELECT id FROM estimacion WHERE proyecto_id=?', [idSafe]
   );
   for (const est of estimaciones) {
-    await database.runAsync('DELETE FROM detalle_estimacion WHERE estimacion_id=?', [est.id]);
-    await database.runAsync('DELETE FROM evidencia WHERE estimacion_id=?', [est.id]);
-    await database.runAsync('DELETE FROM croquis WHERE estimacion_id=?', [est.id]);
+    const estIdSafe = Number(est.id);
+    await database.runAsync('DELETE FROM detalle_estimacion WHERE estimacion_id=?', [estIdSafe]);
+    await database.runAsync('DELETE FROM evidencia WHERE estimacion_id=?', [estIdSafe]);
+    await database.runAsync('DELETE FROM croquis WHERE estimacion_id=?', [estIdSafe]);
   }
-  await database.runAsync('DELETE FROM estimacion WHERE proyecto_id=?', [proyectoId]);
-  await database.runAsync('DELETE FROM concepto WHERE proyecto_id=?', [proyectoId]);
-  await database.runAsync('DELETE FROM proyecto WHERE id=?', [proyectoId]);
+  await database.runAsync('DELETE FROM estimacion WHERE proyecto_id=?', [idSafe]);
+  await database.runAsync('DELETE FROM concepto WHERE proyecto_id=?', [idSafe]);
+  await database.runAsync('DELETE FROM proyecto WHERE id=?', [idSafe]);
 }
 
 // ─── Actualizar contadores del proyecto ───────────────────────────────────────
@@ -783,10 +833,37 @@ export async function getUsuarioByUserId(userId: string): Promise<{
   password_hash: string;
   salt: string;
 } | null> {
+  await initDatabase();
+  const uidSafe = String(userId ?? '');
+  if (!uidSafe) return null;
   return getDb().getFirstAsync<{
     user_id: string;
     nombre: string;
     password_hash: string;
     salt: string;
-  }>('SELECT user_id, nombre, password_hash, salt FROM usuarios WHERE user_id=?', [userId]);
+  }>('SELECT user_id, nombre, password_hash, salt FROM usuarios WHERE user_id=?', [uidSafe]);
+}
+
+/**
+ * Actualiza la contraseña de un usuario en SQLite local.
+ * Usado por el flujo "Olvidaste tu contraseña" tras validar email registrado.
+ * Retorna true si se actualizó algún registro, false si no existía.
+ */
+export async function updateUserPassword(
+  userId: string,
+  passwordHash: string,
+  salt: string,
+): Promise<boolean> {
+  await initDatabase();
+  const uidSafe = String(userId ?? '');
+  const hashSafe = String(passwordHash ?? '');
+  const saltSafe = String(salt ?? '');
+  if (!uidSafe || !hashSafe || !saltSafe) {
+    throw new Error('updateUserPassword: parámetros inválidos');
+  }
+  const r = await getDb().runAsync(
+    'UPDATE usuarios SET password_hash=?, salt=? WHERE user_id=?',
+    [hashSafe, saltSafe, uidSafe],
+  );
+  return Number(r.changes ?? 0) > 0;
 }

@@ -20,7 +20,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import { getCurrentUserId } from '../../utils/auth';
+import { getCurrentUserId, clearSessionState } from '../../utils/auth';
 import {
   Obra,
   getObras,
@@ -534,12 +534,15 @@ export default function AjustesScreen() {
           {/* Cerrar Sesión */}
           <TouchableOpacity
             onPress={async () => {
-              await AsyncStorage.multiRemove([
-                '@estimafacil:logged', '@estimafacil:email',
-                '@estimafacil:remember', '@estimafacil:firstTime',
-                '@estimafacil:user_id',
-                'obra', 'frente',
-              ]);
+              // clearSessionState lee userId ANTES de borrar la clave base y
+              // limpia también las claves prefijadas de suscripción/trial,
+              // de modo que el siguiente login no quede bloqueado por un
+              // "trial consumido" residual de la sesión anterior.
+              try {
+                await clearSessionState();
+              } catch (e) {
+                if (__DEV__) console.warn('[Ajustes] clearSessionState error:', e);
+              }
               router.replace('/(auth)/login');
             }}
             style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10 }}

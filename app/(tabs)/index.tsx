@@ -10,7 +10,7 @@ import {
   ScrollView, Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { router, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -57,6 +57,14 @@ export default function ProyectosScreen() {
   // Picker de reasignacion: cuando es != null, abre Modal para cambiar obra del proyecto.
   const [reassignProyecto, setReassignProyecto] = useState<Proyecto | null>(null);
 
+  // V11/V12 guard anti-race: useEffect[] (mount inicial) y useFocusEffect
+  // disparan ambos en el primer render. Si dos loadProyectos() corren en
+  // paralelo, expo-sqlite SDK16 puede rechazar prepareAsync con "call to
+  // function NativeStatement". Estos refs evitan la doble ejecución y
+  // serializan los loads concurrentes.
+  const initialMountDoneRef = useRef(false);
+  const loadingProyectosRef = useRef(false);
+
   useEffect(() => {
     (async () => {
       const logged = await AsyncStorage.getItem('@estimafacil:logged');
@@ -73,12 +81,16 @@ export default function ProyectosScreen() {
       }
       await evaluateSubscriptionGate(true);
       await loadProyectos();
+      initialMountDoneRef.current = true;
     })();
   }, []);
 
   useFocusEffect(
     useCallback(() => {
       (async () => {
+        // En el primer render useEffect[] ya hace todo; saltar para evitar
+        // el race condition que disparaba "NativeStatement" intermitente.
+        if (!initialMountDoneRef.current) return;
         // Al volver a la tab: re-evaluar suscripción y re-cargar proyectos.
         // Pasamos isFirstMount=false para preservar el estado previo si la red falla.
         await evaluateSubscriptionGate(false);
@@ -117,8 +129,14 @@ export default function ProyectosScreen() {
   };
 
   const loadProyectos = async () => {
+    // V11/V12: serializar concurrent loads. Si ya hay uno corriendo, salimos.
+    if (loadingProyectosRef.current) return;
+    loadingProyectosRef.current = true;
     setLoading(true);
     try {
+      // initDatabase es idempotente y necesaria para asegurar que el handle
+      // SQLite está listo antes de cualquier prepareAsync.
+      await initDatabase();
       const userId = await getCurrentUserId();
       const data = await getProyectos(userId);
 
@@ -131,8 +149,16 @@ export default function ProyectosScreen() {
 
       const proyectosConRestante = await Promise.all(
         (data as Proyecto[]).map(async (p) => {
-          const totalEstimado = await getTotalEstimadoPorProyecto(p.id);
-          const displayWeek = await getProyectoDisplayWeek(p.id);
+          const pidSafe = Number(p.id);
+          if (!Number.isFinite(pidSafe) || pidSafe <= 0) {
+            return {
+              ...p,
+              monto_restante: Math.max(0, p.monto_contrato),
+              display_week: 0,
+            };
+          }
+          const totalEstimado = await getTotalEstimadoPorProyecto(pidSafe);
+          const displayWeek = await getProyectoDisplayWeek(pidSafe);
           return {
             ...p,
             monto_restante: Math.max(0, p.monto_contrato - totalEstimado),
@@ -141,7 +167,10 @@ export default function ProyectosScreen() {
         })
       );
       setProyectos(proyectosConRestante);
+    } catch (e: any) {
+      if (__DEV__) console.warn('[ProyectosScreen] loadProyectos error:', e?.message ?? e);
     } finally {
+      loadingProyectosRef.current = false;
       setLoading(false);
     }
   };

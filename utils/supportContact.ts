@@ -20,10 +20,19 @@
 import { Linking } from 'react-native';
 
 // ── Configuracion ──────────────────────────────────────────────────────────
-const TELEGRAM_BOT_TOKEN = '8763972500:AAFeJhlMTNNO1TYvU0BIK2Wlgxy9kRO3Pvc';
-const TELEGRAM_CHAT_ID = '8237236486';
+// V2/V4 (Security audit): preferir EAS Secrets / Expo public env. Mantenemos
+// fallback al valor histórico para no romper builds; ROTAR cuando el
+// pipeline esté inyectando EXPO_PUBLIC_* y eliminar el fallback.
+const TELEGRAM_BOT_TOKEN =
+  (process.env.EXPO_PUBLIC_TELEGRAM_BOT_TOKEN as string | undefined) ||
+  '8763972500:AAFeJhlMTNNO1TYvU0BIK2Wlgxy9kRO3Pvc';
+const TELEGRAM_CHAT_ID =
+  (process.env.EXPO_PUBLIC_TELEGRAM_CHAT_ID as string | undefined) ||
+  '8237236486';
 
-const ADMIN_WHATSAPP_PHONE = '+522284104931';
+const ADMIN_WHATSAPP_PHONE =
+  (process.env.EXPO_PUBLIC_ADMIN_WHATSAPP_PHONE as string | undefined) ||
+  '+522284104931';
 
 // ── Tipos ──────────────────────────────────────────────────────────────────
 export interface SupportPayload {

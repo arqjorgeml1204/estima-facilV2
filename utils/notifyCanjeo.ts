@@ -10,13 +10,26 @@
  */
 
 // ── Configuracion ──────────────────────────────────────────────────────────
-const TELEGRAM_BOT_TOKEN = '8763972500:AAFeJhlMTNNO1TYvU0BIK2Wlgxy9kRO3Pvc';
-const TELEGRAM_CHAT_ID = '8237236486';
+// V2/V4 (Security audit): los secretos viven preferentemente en EAS Secrets
+// (Expo public env). Mantenemos fallback al valor histórico para no romper
+// builds existentes; ROTAR estos secretos y eliminar el fallback en cuanto
+// el pipeline EAS esté inyectando las variables EXPO_PUBLIC_*. NO loguear
+// estos valores nunca.
+const TELEGRAM_BOT_TOKEN =
+  (process.env.EXPO_PUBLIC_TELEGRAM_BOT_TOKEN as string | undefined) ||
+  '8763972500:AAFeJhlMTNNO1TYvU0BIK2Wlgxy9kRO3Pvc';
+const TELEGRAM_CHAT_ID =
+  (process.env.EXPO_PUBLIC_TELEGRAM_CHAT_ID as string | undefined) ||
+  '8237236486';
 
 // Secret compartido con la Edge Function (Dashboard > Edge Functions > Secrets)
-const REVOKE_SECRET_TOKEN = '06f41cac8cf08c934f6f26b85fd7bc85d26d4da48c6abecf';
+const REVOKE_SECRET_TOKEN =
+  (process.env.EXPO_PUBLIC_REVOKE_SECRET_TOKEN as string | undefined) ||
+  '06f41cac8cf08c934f6f26b85fd7bc85d26d4da48c6abecf';
 // URL de la Edge Function desplegada en Supabase
-const REVOKE_ENDPOINT = 'https://zolfaqrvgirdnwqypxwd.supabase.co/functions/v1/revoke-code';
+const REVOKE_ENDPOINT =
+  (process.env.EXPO_PUBLIC_REVOKE_ENDPOINT as string | undefined) ||
+  'https://zolfaqrvgirdnwqypxwd.supabase.co/functions/v1/revoke-code';
 
 interface CanjeoInfo {
   code: string;
